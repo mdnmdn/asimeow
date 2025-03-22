@@ -21,6 +21,10 @@ anyhow = "1.0"
 clap = { version = "4.4", features = ["derive"] }
 dirs = "5.0"
 
+[lib]
+name = "asimeow"
+path = "src/lib.rs"
+
 [[bin]]
 name = "asimeow"
 path = "src/main.rs"
