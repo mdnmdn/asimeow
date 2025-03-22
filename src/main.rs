@@ -2,10 +2,9 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use glob::Pattern;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use walkdir::{DirEntry, WalkDir};
+use std::sync::{Arc, RwLock};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Config {
@@ -23,6 +22,10 @@ struct Rule {
     name: String,
     file_match: String,
     exclusions: Vec<String>,
+}
+
+struct State {
+    folder_queue: RwLock<Vec<PathBuf>>,
 }
 
 #[derive(Parser, Debug)]
@@ -74,27 +77,35 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Create shared state
+    let state = Arc::new(State {
+        folder_queue: RwLock::new(Vec::new()),
+    });
+
     // Process each root path
     for root in &config.roots {
         let expanded_path = expand_tilde(&root.path)?;
 
-        if args.verbose {
-            println!("Processing: {}", expanded_path.display());
-        }
-
-        if !expanded_path.exists() {
-            eprintln!("Error: Path does not exist: {}", expanded_path.display());
-            continue;
-        }
-
-        if !expanded_path.is_dir() {
-            eprintln!("Error: Not a directory: {}", expanded_path.display());
-            continue;
-        }
-
-        match process_directory(&expanded_path, &config.rules, args.verbose) {
+        // Process the root path
+        match process_path(&expanded_path, Arc::clone(&state), &config.rules, args.verbose) {
             Ok(_) => {},
-            Err(e) => eprintln!("Error: {}", e),
+            Err(e) => eprintln!("Error processing root path {}: {}", expanded_path.display(), e),
+        }
+    }
+
+    // Process all paths in the queue
+    loop {
+        let next_path = {
+            let mut queue = state.folder_queue.write().unwrap();
+            if queue.is_empty() {
+                break;
+            }
+            queue.remove(0)
+        };
+
+        match process_path(&next_path, Arc::clone(&state), &config.rules, args.verbose) {
+            Ok(_) => {},
+            Err(e) => eprintln!("Error processing path {}: {}", next_path.display(), e),
         }
     }
 
@@ -111,86 +122,44 @@ fn expand_tilde(path: &str) -> Result<PathBuf> {
     }
 }
 
-fn should_skip_dir(entry: &DirEntry, rules: &[(String, Pattern, Vec<String>)]) -> bool {
-    let path = entry.path();
-
-    // Only check directories
-    if !entry.file_type().is_dir() {
-        return false;
-    }
-
-    let dir_name = path.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
-    let parent = match path.parent() {
-        Some(p) => p,
-        None => return false,
-    };
-
-    // Check if this directory is in the exclusion list of any rule
-    // where the parent directory contains a matching file
-    for (_, pattern, exclusions) in rules {
-        // Skip if exclusions list is empty
-        if exclusions.is_empty() {
-            continue;
-        }
-
-        // Check if parent directory contains any file matching the rule
-        let has_matching_file = fs::read_dir(parent)
-            .ok()
-            .map(|entries| {
-                entries
-                    .filter_map(Result::ok)
-                    .any(|e| {
-                        let name = e.file_name().to_string_lossy().to_lowercase();
-                        pattern.matches(&name)
-                    })
-            })
-            .unwrap_or(false);
-
-        // Convert exclusions to lowercase for case-insensitive comparison
-        let exclusions_lower: Vec<String> = exclusions.iter()
-            .map(|ex| ex.to_lowercase())
-            .collect();
-
-        if has_matching_file && exclusions_lower.iter().any(|ex| ex == &dir_name) {
-            return true;
+fn process_exclusion(path: &Path, rule: &Rule) {
+    // Print in the requested format: /path/to/excluded/dir - rule-name
+    for exclusion in &rule.exclusions {
+        let exclusion_path = path.join(exclusion);
+        if exclusion_path.exists() {
+            println!("{} - {}", exclusion_path.display(), rule.name);
         }
     }
-
-    false
 }
 
-fn process_directory(root: &Path, rules: &[Rule], verbose: bool) -> Result<()> {
-    // Convert rules to patterns for faster matching
-    let rule_patterns: Vec<(String, Pattern, Vec<String>)> = rules
-        .iter()
-        .map(|rule| {
-            let pattern = Pattern::new(&rule.file_match.to_lowercase())
-                .with_context(|| format!("Invalid pattern in rule '{}': {}", rule.name, rule.file_match))
-                .unwrap_or_else(|_| {
-                    if verbose {
-                        eprintln!("Warning: Invalid pattern '{}' in rule '{}', using literal match",
-                                 rule.file_match, rule.name);
-                    }
-                    Pattern::new(&glob::Pattern::escape(&rule.file_match.to_lowercase())).unwrap()
-                });
+fn process_path(path: &Path, state: Arc<State>, rules: &[Rule], verbose: bool) -> Result<()> {
+    // Skip if path doesn't exist or is not a directory
+    if !path.exists() {
+        if verbose {
+            eprintln!("Error: Path does not exist: {}", path.display());
+        }
+        return Ok(());
+    }
 
-            (
-                rule.name.clone(),
-                pattern,
-                rule.exclusions.clone(),
-            )
-        })
-        .collect();
+    if !path.is_dir() {
+        if verbose {
+            eprintln!("Error: Not a directory: {}", path.display());
+        }
+        return Ok(());
+    }
 
-    // Track directories where we've already processed exclusions
-    let mut processed_dirs = HashSet::new();
+    if verbose {
+        println!("Processing path: {}", path.display());
+    }
 
-    let walker = WalkDir::new(root)
-        .follow_links(true)
-        .into_iter()
-        .filter_entry(|e| !should_skip_dir(e, &rule_patterns));
+    // Check if the current directory contains files matching any rule
+    let entries = fs::read_dir(path)
+        .with_context(|| format!("Failed to read directory: {}", path.display()))?;
 
-    for entry_result in walker {
+    let mut subdirs = Vec::new();
+
+    // First pass: collect all entries and check for rule matches
+    for entry_result in entries {
         let entry = match entry_result {
             Ok(entry) => entry,
             Err(err) => {
@@ -201,47 +170,53 @@ fn process_directory(root: &Path, rules: &[Rule], verbose: bool) -> Result<()> {
             }
         };
 
-        let path = entry.path();
-        let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+        let entry_path = entry.path();
+        let file_name = entry_path.file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_lowercase();
+
+
 
         // Check if this entry matches any rule
-        for (rule_name, pattern, exclusions) in &rule_patterns {
-            if pattern.matches(&file_name) {
-                let dir_path = if path.is_file() {
-                    path.parent().unwrap_or(path)
-                } else {
-                    path
-                };
-
-                // Only process each directory once per rule
-                let key = (dir_path.to_path_buf(), rule_name.clone());
-                if processed_dirs.contains(&key) {
-                    continue;
-                }
-
-                processed_dirs.insert(key);
-
-                if verbose {
-                    println!("Found match for rule '{}' at: {}", rule_name, path.display());
-                }
-
-                // Check for and print exclusion paths that exist
-                if !exclusions.is_empty() {
-                    for exclusion in exclusions {
-                        let exclusion_path = dir_path.join(exclusion);
-                        if exclusion_path.exists() {
-                            // Print in the requested format: /path/to/excluded/dir - rule-name
-                            println!("{} - {}", exclusion_path.display(), rule_name);
-                        } else if verbose {
-                            println!("  Exclusion not found: {}", exclusion);
-                        }
+        for rule in rules {
+            let pattern = match Pattern::new(&rule.file_match.to_lowercase()) {
+                Ok(p) => p,
+                Err(_) => {
+                    if verbose {
+                        eprintln!("Warning: Invalid pattern '{}' in rule '{}', using literal match",
+                                 rule.file_match, rule.name);
                     }
-                } else if verbose {
-                    println!("  No exclusions defined for this rule");
+                    Pattern::new(&glob::Pattern::escape(&rule.file_match.to_lowercase())).unwrap()
                 }
+            };
+
+            if pattern.matches(&file_name) {
+                if verbose {
+                    println!("Found match for rule '{}' at: {}", rule.name, entry_path.display());
+                }
+                // matched_rules.push(rule);
+                process_exclusion(path, rule);
+                continue;
             }
+        }
+
+        // If it's a directory, collect it for potential queue addition
+        if entry_path.is_dir() {
+            subdirs.push(entry_path);
+        }
+    }
+
+
+    // Add subdirectories to the queue if no rules matched
+    if !subdirs.is_empty() {
+        let mut queue = state.folder_queue.write().unwrap();
+        for subdir in subdirs {
+            queue.push(subdir);
         }
     }
 
     Ok(())
 }
+
+
