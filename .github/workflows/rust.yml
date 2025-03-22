@@ -9,6 +9,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  BINARY_NAME: asimeow
 
 jobs:
   test:
@@ -16,14 +17,14 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v3
-      
+
       - name: Install Rust toolchain
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
           toolchain: stable
           override: true
-      
+
       - name: Cache dependencies
         uses: actions/cache@v3
         with:
@@ -32,23 +33,60 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          
+
       - name: Run tests
         uses: actions-rs/cargo@v1
         with:
           command: test
-          
+
       - name: Check formatting
         uses: actions-rs/cargo@v1
         with:
           command: fmt
           args: --all -- --check
-          
+
       - name: Run clippy
         uses: actions-rs/cargo@v1
         with:
           command: clippy
           args: -- -D warnings
+
+  build-macos:
+    name: Build macOS Binaries
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        target: [x86_64-apple-darwin, aarch64-apple-darwin]
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          target: ${{ matrix.target }}
+          override: true
+
+      - name: Build release binary
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release --target ${{ matrix.target }}
+
+      - name: Prepare binary for upload
+        run: |
+          mkdir -p release
+          cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }} release/${{ env.BINARY_NAME }}-${{ matrix.target }}
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ env.BINARY_NAME }}-${{ matrix.target }}
+          path: release/${{ env.BINARY_NAME }}-${{ matrix.target }}
+          if-no-files-found: error
 
   publish:
     name: Publish to crates.io
@@ -57,16 +95,72 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      
+
       - name: Install Rust toolchain
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
           toolchain: stable
           override: true
-          
+
       - name: Publish to crates.io
         uses: actions-rs/cargo@v1
         with:
           command: publish
           args: --token ${{ secrets.CRATES_IO_TOKEN }}
+
+  create-release:
+    name: Create GitHub Release
+    needs: [build-macos, publish]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: release
+
+      - name: Prepare release assets
+        run: |
+          cd release
+          # Create zip files for each binary
+          for dir in */; do
+            dir=${dir%/}
+            chmod +x "$dir/$dir"
+            zip -j "$dir.zip" "$dir/$dir"
+          done
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release v${{ steps.get_version.outputs.VERSION }}
+          draft: false
+          prerelease: false
+          files: |
+            release/*.zip
+          body: |
+            ## Asimeow v${{ steps.get_version.outputs.VERSION }}
+
+            ### Installation
+
+            #### Manual Installation
+            Download the appropriate binary for your system:
+            - Intel Mac: asimeow-x86_64-apple-darwin.zip
+            - Apple Silicon Mac: asimeow-aarch64-apple-darwin.zip
+
+            Extract and place the binary in your PATH.
+
+            #### Cargo
+            ```
+            cargo install asimeow
+            ```
+
+            See [CHANGELOG.md](https://github.com/mdnmdn/asimeow/blob/main/CHANGELOG.md) for details on changes in this release.

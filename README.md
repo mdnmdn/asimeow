@@ -17,6 +17,23 @@ A command-line tool that automatically manages macOS Time Machine exclusions for
 
 ## Installation
 
+
+### From GitHub Releases
+
+1. Go to the [Releases page](https://github.com/mdnmdn/asimeow/releases)
+2. Download the appropriate binary for your Mac:
+   - Intel Mac: `asimeow-x86_64-apple-darwin.zip`
+   - Apple Silicon Mac: `asimeow-aarch64-apple-darwin.zip`
+3. Extract the zip file
+4. Move the binary to a location in your PATH:
+
+```bash
+# Example
+unzip asimeow-x86_64-apple-darwin.zip
+chmod +x asimeow-x86_64-apple-darwin
+sudo mv asimeow-x86_64-apple-darwin /usr/local/bin/asimeow
+```
+
 ### From crates.io
 
 ```bash
@@ -120,7 +137,6 @@ roots:
 # Define directories to ignore during exploration
 ignore:
   - .git              # Common directories to skip
-  - node_modules      # You can add any directory patterns to ignore
 
 # Define rules for different project types
 rules:
