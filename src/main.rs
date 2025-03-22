@@ -6,6 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::thread;
+use std::process::Command;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Config {
@@ -196,12 +197,49 @@ fn expand_tilde(path: &str) -> Result<PathBuf> {
     }
 }
 
+/// Excludes a path from Time Machine backups on macOS.
+/// Returns true if the path was successfully excluded or false if it was already excluded.
+fn exclude_from_timemachine(path: &Path) -> bool {
+    // Check if the path is already excluded
+    let check_output = Command::new("tmutil")
+        .args(&["isexcluded", path.to_str().unwrap_or_default()])
+        .output();
+
+    match check_output {
+        Ok(output) => {
+            let output_str = String::from_utf8_lossy(&output.stdout);
+
+            // If the path is already excluded, tmutil will report "[Excluded]"
+            if output_str.contains("[Excluded]") {
+                return false; // Already excluded
+            }
+
+            // Exclude the path
+            let exclude_result = Command::new("tmutil")
+                .args(&["addexclusion", path.to_str().unwrap_or_default()])
+                .status();
+
+            match exclude_result {
+                Ok(status) => status.success(),
+                Err(_) => false,
+            }
+        },
+        Err(_) => false, // Failed to run tmutil
+    }
+}
+
 fn process_exclusion(path: &Path, rule: &Rule, state: &Arc<State>) {
     // Print in the requested format: /path/to/excluded/dir - rule-name
     for exclusion in &rule.exclusions {
         let exclusion_path = path.join(exclusion);
         if exclusion_path.exists() {
             println!("{} - {}", exclusion_path.display(), rule.name);
+
+            // Try to exclude from Time Machine
+            let excluded = exclude_from_timemachine(&exclusion_path);
+            if excluded {
+                println!("  → Excluded from Time Machine: {}", exclusion_path.display());
+            }
 
             // Increment the exclusion_found counter
             let mut counter = state.exclusion_found.write().unwrap();
