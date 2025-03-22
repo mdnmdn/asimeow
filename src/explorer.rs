@@ -104,7 +104,7 @@ fn process_exclusion(path: &Path, rule: &Rule, state: &Arc<State>, verbose: bool
     }
 }
 
-pub fn process_path(path: &Path, state: Arc<State>, rules: &[Rule], verbose: bool) -> Result<()> {
+pub fn process_path(path: &Path, state: Arc<State>, rules: &[Rule], verbose: bool, ignore_patterns: &[String]) -> Result<()> {
     // Skip if path doesn't exist or is not a directory
     if !path.exists() {
         if verbose {
@@ -118,6 +118,30 @@ pub fn process_path(path: &Path, state: Arc<State>, rules: &[Rule], verbose: boo
             eprintln!("Error: Not a directory: {}", path.display());
         }
         return Ok(());
+    }
+
+    // Check if this directory should be ignored based on its name
+    if let Some(dir_name) = path.file_name() {
+        let dir_name_str = dir_name.to_string_lossy().to_string();
+        for pattern in ignore_patterns {
+            // Use glob pattern matching for ignore patterns
+            let glob_pattern = match Pattern::new(pattern) {
+                Ok(p) => p,
+                Err(_) => {
+                    if verbose {
+                        eprintln!("Warning: Invalid ignore pattern '{}', using literal match", pattern);
+                    }
+                    Pattern::new(&glob::Pattern::escape(pattern)).unwrap()
+                }
+            };
+
+            if glob_pattern.matches(&dir_name_str) {
+                if verbose {
+                    println!("Skipping ignored directory: {}", path.display());
+                }
+                return Ok(());
+            }
+        }
     }
 
     // Increment the processed_paths counter
@@ -210,11 +234,13 @@ pub fn run_workers(
     rules: Arc<Vec<Rule>>,
     thread_count: usize,
     verbose: bool,
+    ignore_patterns: Arc<Vec<String>>,
 ) -> Result<()> {
     // Spawn worker threads to process the queue
     for _ in 0..thread_count {
         let state_clone = Arc::clone(&state);
         let rules_clone = Arc::clone(&rules);
+        let ignore_patterns_clone = Arc::clone(&ignore_patterns);
         let verbose_clone = verbose;
 
         thread::spawn(move || {
@@ -245,6 +271,7 @@ pub fn run_workers(
                         Arc::clone(&state_clone),
                         &rules_clone,
                         verbose_clone,
+                        &ignore_patterns_clone,
                     ) {
                         eprintln!("Error processing path {}: {}", next_path.display(), e);
                     }
@@ -296,11 +323,12 @@ pub fn run_explorer(config: crate::config::Config, thread_count: usize, verbose:
         queue.push(expanded_path);
     }
 
-    // Create Arc-wrapped rules for sharing
+    // Create Arc-wrapped rules and ignore patterns for sharing
     let rules = Arc::new(config.rules);
+    let ignore_patterns = Arc::new(config.ignore);
 
     // Run worker threads
-    run_workers(state.clone(), rules, thread_count, verbose)?;
+    run_workers(state.clone(), rules, thread_count, verbose, ignore_patterns)?;
 
     // Print the total number of exclusions found and processed paths
     let exclusions_count = *state.exclusion_found.read().unwrap();

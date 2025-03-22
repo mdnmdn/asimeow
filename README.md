@@ -117,6 +117,11 @@ roots:
   - path: ~/projects/  # Will be expanded to your home directory
   - path: ~/work/      # You can specify multiple roots
 
+# Define directories to ignore during exploration
+ignore:
+  - .git              # Common directories to skip
+  - node_modules      # You can add any directory patterns to ignore
+
 # Define rules for different project types
 rules:
   # Node.js projects
@@ -140,6 +145,10 @@ When you run `asimeow init`, a default configuration file will be created with c
 - **roots**: List of base paths to process
   - **path**: Directory path to start exploring (supports ~ for home directory)
 
+- **ignore**: List of directory patterns to skip during exploration (e.g., `.git`, `node_modules`)
+  - These directories will be completely ignored during the exploration process
+  - Useful for improving performance by skipping large directories that don't need to be scanned
+
 - **rules**: List of rules to apply
   - **name**: Descriptive name for the rule
   - **file_match**: Glob pattern to match files or directories
@@ -147,15 +156,16 @@ When you run `asimeow init`, a default configuration file will be created with c
 
 ## How It Works
 
-1. The tool reads the configuration file to get root paths and rules
+1. The tool reads the configuration file to get root paths, ignore patterns, and rules
 2. For each root path, it recursively explores all subdirectories using multiple worker threads
-3. When a file matching a rule's pattern is found (e.g., package.json, cargo.toml), it checks for the existence of excluded directories
-4. For each excluded directory that exists (e.g., node_modules, target), it:
+3. Directories matching the ignore patterns (e.g., `.git`) are skipped entirely during exploration
+4. When a file matching a rule's pattern is found (e.g., package.json, cargo.toml), it checks for the existence of excluded directories
+5. For each excluded directory that exists (e.g., node_modules, target), it:
    - Checks if the directory is already excluded from Time Machine
    - If not, adds it to Time Machine exclusions using `tmutil addexclusion`
    - Displays the status with visual indicators (✅ for newly excluded, 🟡 for already excluded)
-5. Directories listed in the exclusions are not explored further
-6. With the verbose flag (-v), additional information is displayed
+6. Directories listed in the exclusions are not explored further
+7. With the verbose flag (-v), additional information is displayed
 
 ## Example Output
 

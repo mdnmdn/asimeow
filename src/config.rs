@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
     pub roots: Vec<Root>,
+    #[serde(default)]
+    pub ignore: Vec<String>,
     pub rules: Vec<Rule>,
 }
 
@@ -50,6 +52,7 @@ pub fn create_default_config(local: bool, specified_path: Option<&str>) -> Resul
         roots: vec![Root {
             path: "~/".to_string(),
         }],
+        ignore: vec![".git".to_string()],
         rules: vec![
             Rule {
                 name: "net".to_string(),

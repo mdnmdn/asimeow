@@ -1,6 +1,9 @@
 roots:
   - path: ~/works/projects
 
+ignore:
+  - .git
+
 rules:
   - name: "net"
     file_match: "*.csproj"

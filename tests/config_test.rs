@@ -25,7 +25,7 @@ mod tests {
         );
 
         // Check that roots is an array
-        let roots = config["roots"]
+        let _roots = config["roots"]
             .as_sequence()
             .expect("'roots' is not an array");
 
