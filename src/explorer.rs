@@ -17,7 +17,6 @@ pub struct State {
     pub newly_excluded: RwLock<i32>,
 }
 
-
 static THIS_FOLDER: OnceLock<String> = OnceLock::new();
 static PARENT_FOLDER: OnceLock<String> = OnceLock::new();
 
@@ -109,7 +108,13 @@ fn process_exclusion(path: &Path, rule: &Rule, state: &Arc<State>, verbose: bool
     }
 }
 
-pub fn process_path(path: &Path, state: Arc<State>, rules: &[Rule], verbose: bool, ignore_patterns: &[String]) -> Result<()> {
+pub fn process_path(
+    path: &Path,
+    state: Arc<State>,
+    rules: &[Rule],
+    verbose: bool,
+    ignore_patterns: &[String],
+) -> Result<()> {
     // Skip if path doesn't exist or is not a directory
     if !path.exists() {
         if verbose {
@@ -134,7 +139,10 @@ pub fn process_path(path: &Path, state: Arc<State>, rules: &[Rule], verbose: boo
                 Ok(p) => p,
                 Err(_) => {
                     if verbose {
-                        eprintln!("Warning: Invalid ignore pattern '{}', using literal match", pattern);
+                        eprintln!(
+                            "Warning: Invalid ignore pattern '{}', using literal match",
+                            pattern
+                        );
                     }
                     Pattern::new(&glob::Pattern::escape(pattern)).unwrap()
                 }
@@ -216,11 +224,18 @@ pub fn process_path(path: &Path, state: Arc<State>, rules: &[Rule], verbose: boo
                 }
                 process_exclusion(path, rule, &state, verbose);
                 // Return early if the rule has exclusions containing "." or ".."
-                if rule.exclusions.contains(THIS_FOLDER.get_or_init(|| ".".to_string()))
-                    || rule.exclusions.contains(PARENT_FOLDER.get_or_init(|| "..".to_string())) {
-                    return Ok(())
+                if rule
+                    .exclusions
+                    .contains(THIS_FOLDER.get_or_init(|| ".".to_string()))
+                    || rule
+                        .exclusions
+                        .contains(PARENT_FOLDER.get_or_init(|| "..".to_string()))
+                {
+                    return Ok(());
                 }
-                rule.exclusions.iter().for_each(|exclusion| directory_to_ignore.push(exclusion.as_str()));
+                rule.exclusions
+                    .iter()
+                    .for_each(|exclusion| directory_to_ignore.push(exclusion.as_str()));
 
                 break; // Found a match for this entry, no need to check other rules
             }
@@ -229,10 +244,17 @@ pub fn process_path(path: &Path, state: Arc<State>, rules: &[Rule], verbose: boo
         // If it's a directory, collect it for potential queue addition
         if entry_path.is_dir() {
             // Only add directories that are not explicitly ignored by their names
-            if directory_to_ignore.is_empty() || !directory_to_ignore.contains(&entry_path.file_name().unwrap_or_default().to_string_lossy().as_ref()) {
+            if directory_to_ignore.is_empty()
+                || !directory_to_ignore.contains(
+                    &entry_path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .as_ref(),
+                )
+            {
                 subdirs.push(entry_path);
             }
-
         }
     }
 
@@ -328,7 +350,11 @@ pub fn run_workers(
     Ok(())
 }
 
-pub fn run_explorer(config: crate::config::Config, thread_count: usize, verbose: bool) -> Result<()> {
+pub fn run_explorer(
+    config: crate::config::Config,
+    thread_count: usize,
+    verbose: bool,
+) -> Result<()> {
     // Create shared state
     let state = Arc::new(State::new());
 

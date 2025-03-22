@@ -41,7 +41,10 @@ pub fn create_default_config(local: bool, specified_path: Option<&str>) -> Resul
     // Check if the file already exists
     let path_obj = Path::new(&config_path);
     if path_obj.exists() {
-        return Err(anyhow::anyhow!("Config file already exists at: {}", config_path));
+        return Err(anyhow::anyhow!(
+            "Config file already exists at: {}",
+            config_path
+        ));
     }
 
     // Ensure the directory exists

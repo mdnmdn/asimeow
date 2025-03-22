@@ -1,7 +1,7 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
 use asimeow::config;
 use asimeow::explorer;
+use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[command(
