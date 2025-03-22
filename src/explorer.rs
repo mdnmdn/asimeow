@@ -4,7 +4,8 @@ use glob::Pattern;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, RwLock};
+use std::string::ToString;
+use std::sync::{Arc, OnceLock, RwLock};
 use std::thread;
 
 pub struct State {
@@ -15,6 +16,10 @@ pub struct State {
     pub processing_complete: RwLock<bool>,
     pub newly_excluded: RwLock<i32>,
 }
+
+
+static THIS_FOLDER: OnceLock<String> = OnceLock::new();
+static PARENT_FOLDER: OnceLock<String> = OnceLock::new();
 
 impl Default for State {
     fn default() -> Self {
@@ -165,6 +170,8 @@ pub fn process_path(path: &Path, state: Arc<State>, rules: &[Rule], verbose: boo
 
     let mut subdirs = Vec::new();
 
+    let mut directory_to_ignore = vec![];
+
     // First pass: collect all entries and check for rule matches
     for entry_result in entries {
         let entry = match entry_result {
@@ -208,13 +215,24 @@ pub fn process_path(path: &Path, state: Arc<State>, rules: &[Rule], verbose: boo
                     );
                 }
                 process_exclusion(path, rule, &state, verbose);
+                // Return early if the rule has exclusions containing "." or ".."
+                if rule.exclusions.contains(THIS_FOLDER.get_or_init(|| ".".to_string()))
+                    || rule.exclusions.contains(PARENT_FOLDER.get_or_init(|| "..".to_string())) {
+                    return Ok(())
+                }
+                rule.exclusions.iter().for_each(|exclusion| directory_to_ignore.push(exclusion.as_str()));
+
                 break; // Found a match for this entry, no need to check other rules
             }
         }
 
         // If it's a directory, collect it for potential queue addition
         if entry_path.is_dir() {
-            subdirs.push(entry_path);
+            // Only add directories that are not explicitly ignored by their names
+            if directory_to_ignore.is_empty() || !directory_to_ignore.contains(&entry_path.file_name().unwrap_or_default().to_string_lossy().as_ref()) {
+                subdirs.push(entry_path);
+            }
+
         }
     }
 

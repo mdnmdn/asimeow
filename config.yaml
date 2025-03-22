@@ -1,5 +1,5 @@
 roots:
-  - path: ~/works/projects
+  - path: ..
 
 ignore:
   - .git
@@ -20,6 +20,12 @@ rules:
   - name: "python"
     file_match: "requirements.txt"
     exclusions: ["__pycache__", ".venv"]
+  - name: "pyenv"
+    file_match: "pyvenv.cfg"
+    exclusions: ['.']
+  - name: "ruby"
+    file_match: "Gemfile"
+    exclusions: ["bundle"]
   - name: "java"
     file_match: "pom.xml"
     exclusions: ["target"]
