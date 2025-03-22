@@ -1,4 +1,4 @@
-name: Rust CI/CD
+name: asimeow CI - test and publish
 
 on:
   push:
@@ -124,7 +124,7 @@ jobs:
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           path: release
 
