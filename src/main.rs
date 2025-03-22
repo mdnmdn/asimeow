@@ -1,12 +1,13 @@
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use glob::Pattern;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, RwLock};
 use std::thread;
-use std::process::Command;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Config {
@@ -37,9 +38,9 @@ struct State {
 
 #[derive(Parser, Debug)]
 #[command(
-    author = "Asimaw",
+    author = "mdnmdn",
     version = "0.1.0",
-    about = "Recursively analyzes folders according to rules defined in a configuration file",
+    about = "A tool for managing macOS Time Machine exclusions for developer projects",
     long_about = None
 )]
 struct Args {
@@ -54,14 +55,146 @@ struct Args {
     /// Number of worker threads
     #[arg(short, long, default_value = "4")]
     threads: usize,
+
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Initialize a new config file with default rules
+    Init {
+        /// Path where to create the config file
+        #[arg(short, long)]
+        path: Option<String>,
+    },
+}
+
+/// Creates a default config file with common development project rules
+fn create_default_config(path: &str) -> Result<()> {
+    // Create a default config with common rules
+    let config = Config {
+        roots: vec![Root {
+            path: "~/works/projects/".to_string(),
+        }],
+        rules: vec![
+            Rule {
+                name: "net".to_string(),
+                file_match: "*.csproj".to_string(),
+                exclusions: vec!["obj".to_string(), "bin".to_string(), "packages".to_string()],
+            },
+            Rule {
+                name: "rust".to_string(),
+                file_match: "cargo.toml".to_string(),
+                exclusions: vec!["target".to_string()],
+            },
+            Rule {
+                name: "go".to_string(),
+                file_match: "go.mod".to_string(),
+                exclusions: vec!["vendor".to_string()],
+            },
+            Rule {
+                name: "node".to_string(),
+                file_match: "package.json".to_string(),
+                exclusions: vec!["node_modules".to_string(), "dist".to_string()],
+            },
+            Rule {
+                name: "python".to_string(),
+                file_match: "requirements.txt".to_string(),
+                exclusions: vec!["__pycache__".to_string(), ".venv".to_string()],
+            },
+            Rule {
+                name: "java".to_string(),
+                file_match: "pom.xml".to_string(),
+                exclusions: vec!["target".to_string()],
+            },
+            Rule {
+                name: "php".to_string(),
+                file_match: "composer.json".to_string(),
+                exclusions: vec!["vendor".to_string()],
+            },
+            Rule {
+                name: "vagrant".to_string(),
+                file_match: "Vagrantfile".to_string(),
+                exclusions: vec![".vagrant".to_string()],
+            },
+            Rule {
+                name: "bower".to_string(),
+                file_match: "bower.json".to_string(),
+                exclusions: vec!["bower_components".to_string()],
+            },
+            Rule {
+                name: "haskell".to_string(),
+                file_match: "stack.yaml".to_string(),
+                exclusions: vec![".stack-work".to_string()],
+            },
+            Rule {
+                name: "carthage".to_string(),
+                file_match: "Cartfile".to_string(),
+                exclusions: vec!["Carthage".to_string()],
+            },
+            Rule {
+                name: "cocoapods".to_string(),
+                file_match: "Podfile".to_string(),
+                exclusions: vec!["Pods".to_string()],
+            },
+            Rule {
+                name: "swift".to_string(),
+                file_match: "Package.swift".to_string(),
+                exclusions: vec![".build".to_string()],
+            },
+            Rule {
+                name: "elixir".to_string(),
+                file_match: "mix.exs".to_string(),
+                exclusions: vec!["_build".to_string()],
+            },
+            Rule {
+                name: "project".to_string(),
+                file_match: "*.prj".to_string(),
+                exclusions: vec!["bin".to_string(), "debug".to_string()],
+            },
+        ],
+    };
+
+    // Serialize the config to YAML
+    let yaml =
+        serde_yaml::to_string(&config).context("Failed to serialize default config to YAML")?;
+
+    // Check if the file already exists
+    let path_obj = Path::new(path);
+    if path_obj.exists() {
+        return Err(anyhow::anyhow!("Config file already exists at: {}", path));
+    }
+
+    // Create the file and write the YAML content
+    let mut file = fs::File::create(path)
+        .with_context(|| format!("Failed to create config file at: {}", path))?;
+
+    file.write_all(yaml.as_bytes())
+        .with_context(|| format!("Failed to write to config file at: {}", path))?;
+
+    println!("✅ Created default config file at: {}", path);
+    println!("You may want to edit the file to customize the root paths for your system.");
+
+    Ok(())
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
 
+    // Handle subcommands
+    if let Some(command) = &args.command {
+        match command {
+            Commands::Init { path } => {
+                let config_path = path.as_deref().unwrap_or(&args.config);
+                return create_default_config(config_path);
+            }
+        }
+    }
+
     if args.verbose {
-        println!("Asimaw - Folder Analysis Tool");
-        println!("-----------------------------");
+        println!("Asimeow - Time Machine Exclusion Tool");
+        println!("------------------------------------");
         println!("Reading config from: {}", args.config);
         println!("Using {} worker threads", args.threads);
     }
@@ -76,10 +209,12 @@ fn main() -> Result<()> {
     if args.verbose {
         println!("\nLoaded {} rules:", config.rules.len());
         for rule in &config.rules {
-            println!("  - {} (pattern: {}, exclusions: {})",
-                     rule.name,
-                     rule.file_match,
-                     rule.exclusions.join(", "));
+            println!(
+                "  - {} (pattern: {}, exclusions: {})",
+                rule.name,
+                rule.file_match,
+                rule.exclusions.join(", ")
+            );
         }
         println!();
     }
@@ -142,7 +277,12 @@ fn main() -> Result<()> {
 
                 if let Some(next_path) = next_path_option {
                     // Process the path
-                    if let Err(e) = process_path(&next_path, Arc::clone(&state_clone), &rules_clone, verbose_clone) {
+                    if let Err(e) = process_path(
+                        &next_path,
+                        Arc::clone(&state_clone),
+                        &rules_clone,
+                        verbose_clone,
+                    ) {
                         eprintln!("Error processing path {}: {}", next_path.display(), e);
                     }
 
@@ -193,8 +333,7 @@ fn main() -> Result<()> {
 
 fn expand_tilde(path: &str) -> Result<PathBuf> {
     if path.starts_with("~/") {
-        let home_dir = dirs::home_dir()
-            .context("Could not determine home directory")?;
+        let home_dir = dirs::home_dir().context("Could not determine home directory")?;
         Ok(home_dir.join(&path[2..]))
     } else {
         Ok(PathBuf::from(path))
@@ -227,7 +366,7 @@ fn exclude_from_timemachine(path: &Path) -> bool {
                 Ok(status) => status.success(),
                 Err(_) => false,
             }
-        },
+        }
         Err(_) => false, // Failed to run tmutil
     }
 }
@@ -249,7 +388,10 @@ fn process_exclusion(path: &Path, rule: &Rule, state: &Arc<State>, verbose: bool
                 *newly_excluded += 1;
 
                 if verbose {
-                    println!("  → Excluded from Time Machine: {}", exclusion_path.display());
+                    println!(
+                        "  → Excluded from Time Machine: {}",
+                        exclusion_path.display()
+                    );
                 }
             } else {
                 // Yellow circle for already excluded paths
@@ -317,7 +459,8 @@ fn process_path(path: &Path, state: Arc<State>, rules: &[Rule], verbose: bool) -
         };
 
         let entry_path = entry.path();
-        let file_name = entry_path.file_name()
+        let file_name = entry_path
+            .file_name()
             .unwrap_or_default()
             .to_string_lossy()
             .to_lowercase();
@@ -328,8 +471,10 @@ fn process_path(path: &Path, state: Arc<State>, rules: &[Rule], verbose: bool) -
                 Ok(p) => p,
                 Err(_) => {
                     if verbose {
-                        eprintln!("Warning: Invalid pattern '{}' in rule '{}', using literal match",
-                                 rule.file_match, rule.name);
+                        eprintln!(
+                            "Warning: Invalid pattern '{}' in rule '{}', using literal match",
+                            rule.file_match, rule.name
+                        );
                     }
                     Pattern::new(&glob::Pattern::escape(&rule.file_match.to_lowercase())).unwrap()
                 }
@@ -337,7 +482,11 @@ fn process_path(path: &Path, state: Arc<State>, rules: &[Rule], verbose: bool) -
 
             if pattern.matches(&file_name) {
                 if verbose {
-                    println!("Found match for rule '{}' at: {}", rule.name, entry_path.display());
+                    println!(
+                        "Found match for rule '{}' at: {}",
+                        rule.name,
+                        entry_path.display()
+                    );
                 }
                 process_exclusion(path, rule, &state, verbose);
                 break; // Found a match for this entry, no need to check other rules
@@ -360,5 +509,3 @@ fn process_path(path: &Path, state: Arc<State>, rules: &[Rule], verbose: bool) -
 
     Ok(())
 }
-
-
