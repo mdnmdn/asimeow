@@ -32,6 +32,7 @@ struct State {
     processed_paths: RwLock<i32>,
     active_tasks: RwLock<usize>,
     processing_complete: RwLock<bool>,
+    newly_excluded: RwLock<i32>,
 }
 
 #[derive(Parser, Debug)]
@@ -95,6 +96,7 @@ fn main() -> Result<()> {
         processed_paths: RwLock::new(0),
         active_tasks: RwLock::new(0),
         processing_complete: RwLock::new(false),
+        newly_excluded: RwLock::new(0),
     });
 
     // We'll spawn threads directly instead of using a thread pool
@@ -178,10 +180,12 @@ fn main() -> Result<()> {
     // Print the total number of exclusions found and processed paths
     let exclusions_count = *state.exclusion_found.read().unwrap();
     let processed_count = *state.processed_paths.read().unwrap();
+    let newly_excluded_count = *state.newly_excluded.read().unwrap();
 
     if args.verbose || exclusions_count > 0 {
         println!("\nTotal paths processed: {}", processed_count);
         println!("Total exclusions found: {}", exclusions_count);
+        println!("Newly excluded from Time Machine: {}", newly_excluded_count);
     }
 
     Ok(())
@@ -228,17 +232,32 @@ fn exclude_from_timemachine(path: &Path) -> bool {
     }
 }
 
-fn process_exclusion(path: &Path, rule: &Rule, state: &Arc<State>) {
+fn process_exclusion(path: &Path, rule: &Rule, state: &Arc<State>, verbose: bool) {
     // Print in the requested format: /path/to/excluded/dir - rule-name
     for exclusion in &rule.exclusions {
         let exclusion_path = path.join(exclusion);
         if exclusion_path.exists() {
-            println!("{} - {}", exclusion_path.display(), rule.name);
-
             // Try to exclude from Time Machine
             let excluded = exclude_from_timemachine(&exclusion_path);
+
             if excluded {
-                println!("  → Excluded from Time Machine: {}", exclusion_path.display());
+                // Green tick for newly excluded paths
+                println!("✅ {} - {}", exclusion_path.display(), rule.name);
+
+                // Increment the newly_excluded counter
+                let mut newly_excluded = state.newly_excluded.write().unwrap();
+                *newly_excluded += 1;
+
+                if verbose {
+                    println!("  → Excluded from Time Machine: {}", exclusion_path.display());
+                }
+            } else {
+                // Yellow circle for already excluded paths
+                println!("🟡 {} - {}", exclusion_path.display(), rule.name);
+
+                if verbose {
+                    println!("  → Already excluded from Time Machine");
+                }
             }
 
             // Increment the exclusion_found counter
@@ -320,7 +339,7 @@ fn process_path(path: &Path, state: Arc<State>, rules: &[Rule], verbose: bool) -
                 if verbose {
                     println!("Found match for rule '{}' at: {}", rule.name, entry_path.display());
                 }
-                process_exclusion(path, rule, &state);
+                process_exclusion(path, rule, &state, verbose);
                 break; // Found a match for this entry, no need to check other rules
             }
         }

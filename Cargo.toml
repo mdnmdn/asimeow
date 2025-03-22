@@ -1,9 +1,16 @@
 [package]
-name = "asimaw"
+name = "asimeow"
 version = "0.1.0"
 edition = "2021"
-description = "A tool for analyzing folder structures based on rules"
-authors = ["Asimaw"]
+description = "A tool for managing macOS Time Machine exclusions for developer projects"
+authors = ["mdnmdn"]
+license = "MIT"
+repository = "https://github.com/mdnmdn/asimeow"
+documentation = "https://github.com/mdnmdn/asimeow"
+readme = "README.md"
+keywords = ["macos", "time-machine", "backup", "developer-tools", "utility"]
+categories = ["command-line-utilities", "development-tools", "filesystem"]
+exclude = [".github/", ".gitignore", "tests/"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
@@ -13,6 +20,10 @@ glob = "0.3"
 anyhow = "1.0"
 clap = { version = "4.4", features = ["derive"] }
 dirs = "5.0"
+
+[[bin]]
+name = "asimeow"
+path = "src/main.rs"
 
 [[test]]
 name = "tests"

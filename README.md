@@ -1,34 +1,51 @@
-# Asimaw
+# Asimeow
 
-A command-line tool that recursively analyzes folders according to rules defined in a configuration file.
+A command-line tool that automatically manages macOS Time Machine exclusions for developer projects. It recursively analyzes folders according to rules defined in a configuration file and excludes development artifacts from Time Machine backups.
 
 ## Features
 
 - Recursively explores directories from specified root paths
-- Identifies files matching patterns defined in rules
-- Prints exclusion lists for each matched rule
+- Identifies files matching patterns defined in rules (like package.json, cargo.toml, etc.)
+- Automatically excludes development artifacts from Time Machine backups
+- Shows which directories were newly excluded vs. already excluded
+- Multi-threaded for fast processing of large directory structures
 - Skips exploring excluded directories
 
 ## Installation
 
+### From crates.io
+
 ```bash
+cargo install asimeow
+```
+
+### From Source
+
+```bash
+git clone https://github.com/mdnmdn/asimeow.git
+cd asimeow
 cargo build --release
 ```
 
-The executable will be available at `target/release/asimaw`.
+The executable will be available at `target/release/asimeow`.
 
 ## Usage
 
 ```bash
 # Use default config.yaml in current directory
-./asimaw
+./asimeow
 
 # Specify a custom config file
-./asimaw -c /path/to/config.yaml
+./asimeow -c /path/to/config.yaml
 
 # Enable verbose output
-./asimaw -v
+./asimeow -v
+
+# Specify number of worker threads (default: 4)
+./asimeow -t 8
 ```
+
+Note: This tool requires macOS and uses the `tmutil` command to manage Time Machine exclusions. You may need to run it with sudo for some operations.
 
 ## Configuration
 
@@ -42,7 +59,7 @@ roots:
 rules:
   - name: "net"              # Rule name
     file_match: "*.csproj"   # Glob pattern to match files
-    exclusions:              # Directories to exclude when the pattern is matched
+    exclusions:              # Directories to exclude from Time Machine when the pattern is matched
       - "obj"
       - "bin"
       - "packages"
@@ -50,6 +67,18 @@ rules:
     file_match: "cargo.toml"
     exclusions:
       - "target"
+  - name: "node"
+    file_match: "package.json"
+    exclusions:
+      - "node_modules"
+      - "dist"
+      - "build"
+  - name: "python"
+    file_match: "requirements.txt"
+    exclusions:
+      - "venv"
+      - "__pycache__"
+      - ".pytest_cache"
   - name: "markdown"         # Rule with no exclusions
     file_match: "*.md"
     exclusions: []           # Empty exclusions list
@@ -63,14 +92,17 @@ rules:
 - **rules**: List of rules to apply
   - **name**: Descriptive name for the rule
   - **file_match**: Glob pattern to match files or directories
-  - **exclusions**: List of directory names to exclude from exploration (can be empty)
+  - **exclusions**: List of directory names to exclude from Time Machine backups (can be empty)
 
 ## How It Works
 
 1. The tool reads the configuration file to get root paths and rules
-2. For each root path, it recursively explores all subdirectories
-3. When a file matching a rule's pattern is found, it checks for the existence of excluded directories
-4. For each excluded directory that exists, it prints the path and rule name
+2. For each root path, it recursively explores all subdirectories using multiple worker threads
+3. When a file matching a rule's pattern is found (e.g., package.json, cargo.toml), it checks for the existence of excluded directories
+4. For each excluded directory that exists (e.g., node_modules, target), it:
+   - Checks if the directory is already excluded from Time Machine
+   - If not, adds it to Time Machine exclusions using `tmutil addexclusion`
+   - Displays the status with visual indicators (✅ for newly excluded, 🟡 for already excluded)
 5. Directories listed in the exclusions are not explored further
 6. With the verbose flag (-v), additional information is displayed
 
@@ -79,29 +111,58 @@ rules:
 ### Default Output (Concise)
 
 ```
-/home/user/works/projects/my-rust-project/target - rust
-/home/user/works/projects/my-node-project/node_modules - node
-/home/user/works/projects/my-node-project/dist - node
+✅ /Users/user/works/projects/my-rust-project/target - rust
+🟡 /Users/user/works/projects/my-node-project/node_modules - node
+✅ /Users/user/works/projects/my-node-project/dist - node
+
+Total paths processed: 42
+Total exclusions found: 3
+Newly excluded from Time Machine: 2
 ```
+
+The output uses:
+- ✅ Green check mark: Directory newly excluded from Time Machine
+- 🟡 Yellow circle: Directory already excluded from Time Machine
 
 ### Verbose Output (-v flag)
 
 ```
-Asimaw - Folder Analysis Tool
+Asimeow - Folder Analysis Tool
 -----------------------------
 Reading config from: config.yaml
+Using 4 worker threads
 
 Loaded 3 rules:
   - rust (pattern: cargo.toml, exclusions: target)
   - node (pattern: package.json, exclusions: node_modules, dist)
   - markdown (pattern: *.md, exclusions: )
 
-Processing: /home/user/works/projects
-Found match for rule 'rust' at: /home/user/works/projects/my-rust-project/cargo.toml
-/home/user/works/projects/my-rust-project/target - rust
-Found match for rule 'node' at: /home/user/works/projects/my-node-project/package.json
-/home/user/works/projects/my-node-project/node_modules - node
-/home/user/works/projects/my-node-project/dist - node
-Found match for rule 'markdown' at: /home/user/works/projects/README.md
+Processing path: /Users/user/works/projects
+Found match for rule 'rust' at: /Users/user/works/projects/my-rust-project/cargo.toml
+✅ /Users/user/works/projects/my-rust-project/target - rust
+  → Excluded from Time Machine: /Users/user/works/projects/my-rust-project/target
+Found match for rule 'node' at: /Users/user/works/projects/my-node-project/package.json
+🟡 /Users/user/works/projects/my-node-project/node_modules - node
+  → Already excluded from Time Machine
+✅ /Users/user/works/projects/my-node-project/dist - node
+  → Excluded from Time Machine: /Users/user/works/projects/my-node-project/dist
+Found match for rule 'markdown' at: /Users/user/works/projects/README.md
   No exclusions defined for this rule
+
+Total paths processed: 42
+Total exclusions found: 3
+Newly excluded from Time Machine: 2
 ```
+
+## Why Use Asimeow?
+
+Developers often have large directories of build artifacts, dependencies, and generated files that:
+1. Take up significant space in Time Machine backups
+2. Are easily regenerated and don't need to be backed up
+3. Can slow down backup and restore operations
+
+Asimeow automatically identifies and excludes these directories based on project types, saving backup space and improving Time Machine performance.
+
+## Acknowledgments
+
+Many thanks and kudos to the inspiring project [Asimov](https://github.com/stevegrunwell/asimov) by Steve Grunwell, which provided the original concept for this tool. Asimeow extends the idea with multi-threading, rule-based detection, and a more developer-focused approach.
