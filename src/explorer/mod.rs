@@ -16,6 +16,12 @@ pub struct State {
     pub newly_excluded: RwLock<i32>,
 }
 
+impl Default for State {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl State {
     pub fn new() -> Self {
         State {
@@ -34,7 +40,7 @@ impl State {
 pub fn exclude_from_timemachine(path: &Path) -> bool {
     // Check if the path is already excluded
     let check_output = Command::new("tmutil")
-        .args(&["isexcluded", path.to_str().unwrap_or_default()])
+        .args(["isexcluded", path.to_str().unwrap_or_default()])
         .output();
 
     match check_output {
@@ -48,7 +54,7 @@ pub fn exclude_from_timemachine(path: &Path) -> bool {
 
             // Exclude the path
             let exclude_result = Command::new("tmutil")
-                .args(&["addexclusion", path.to_str().unwrap_or_default()])
+                .args(["addexclusion", path.to_str().unwrap_or_default()])
                 .status();
 
             match exclude_result {

@@ -231,7 +231,7 @@ pub fn load_config(config_path: Option<&str>, verbose: bool) -> Result<(Config, 
 pub fn expand_tilde(path: &str) -> Result<PathBuf> {
     if path.starts_with("~/") {
         let home_dir = dirs::home_dir().context("Could not determine home directory")?;
-        Ok(home_dir.join(&path[2..]))
+        Ok(home_dir.join(path.strip_prefix("~/").unwrap_or(path)))
     } else {
         Ok(PathBuf::from(path))
     }

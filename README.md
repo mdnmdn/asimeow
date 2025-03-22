@@ -1,5 +1,9 @@
 # Asimeow
 
+[![Rust CI/CD](https://github.com/mdnmdn/asimeow/actions/workflows/rust.yml/badge.svg)](https://github.com/mdnmdn/asimeow/actions/workflows/rust.yml)
+[![Crates.io](https://img.shields.io/crates/v/asimeow.svg)](https://crates.io/crates/asimeow)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A command-line tool that automatically manages macOS Time Machine exclusions for developer projects. It recursively analyzes folders according to rules defined in a configuration file and excludes development artifacts from Time Machine backups.
 
 ## Features
@@ -209,6 +213,25 @@ Developers often have large directories of build artifacts, dependencies, and ge
 3. Can slow down backup and restore operations
 
 Asimeow automatically identifies and excludes these directories based on project types, saving backup space and improving Time Machine performance.
+
+## Contributing
+
+Contributions are welcome! Here's how you can contribute to Asimeow:
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/my-new-feature`
+3. Make your changes and commit them: `git commit -am 'Add some feature'`
+4. Push to the branch: `git push origin feature/my-new-feature`
+5. Submit a pull request
+
+### Continuous Integration
+
+This project uses GitHub Actions for continuous integration and deployment:
+
+- All pull requests and pushes to the main branch are automatically tested
+- Tests run on macOS to ensure compatibility with the target platform
+- Code formatting and linting are checked using `cargo fmt` and `clippy`
+- When a new version tag (v*) is pushed, the package is automatically published to crates.io
 
 ## Acknowledgments
 
