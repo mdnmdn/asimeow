@@ -4,30 +4,47 @@ roots:
 rules:
   - name: "net"
     file_match: "*.csproj"
-    exclusions:
-      - "obj"
-      - "bin"
-      - "packages"
+    exclusions: ["obj", "bin", "packages"]
   - name: "rust"
     file_match: "cargo.toml"
-    exclusions:
-      - "target"
+    exclusions: ["target"]
   - name: "go"
     file_match: "go.mod"
-    exclusions:
-      - "vendor"
+    exclusions: ["vendor"]
   - name: "node"
     file_match: "package.json"
-    exclusions:
-      - "node_modules"
-      - "dist"
+    exclusions: ["node_modules", "dist"]
   - name: "python"
     file_match: "requirements.txt"
-    exclusions:
-      - "__pycache__"
-      - ".venv"
+    exclusions: ["__pycache__", ".venv"]
   - name: "java"
     file_match: "pom.xml"
-    exclusions:
-      - "target"
+    exclusions: ["target"]
+  - name: "php"
+    file_match: "composer.json"
+    exclusions: ["vendor"]
+  - name: "vagrant"
+    file_match: "Vagrantfile"
+    exclusions: [".vagrant"]
+  - name: "bower"
+    file_match: "bower.json"
+    exclusions: ["bower_components"]
+  - name: "haskell"
+    file_match: "stack.yaml"
+    exclusions: [".stack-work"]
+  - name: "carthage"
+    file_match: "Cartfile"
+    exclusions: ["Carthage"]
+  - name: "cocoapods"
+    file_match: "Podfile"
+    exclusions: ["Pods"]
+  - name: "swift"
+    file_match: "Package.swift"
+    exclusions: [".build"]
+  - name: "elixir"
+    file_match: "mix.exs"
+    exclusions: ["_build"]
+  - name: "project"
+    file_match: "*.prj"
+    exclusions: ["bin", "debug"]
 
