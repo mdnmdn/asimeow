@@ -23,7 +23,28 @@ pub struct Rule {
 }
 
 /// Creates a default config file with common development project rules
-pub fn create_default_config(path: &str) -> Result<()> {
+pub fn create_default_config(local: bool, specified_path: Option<&str>) -> Result<()> {
+    // Determine the path for the config file
+    let config_path = if let Some(path) = specified_path {
+        path.to_string()
+    } else if local {
+        "config.yaml".to_string()
+    } else {
+        // Use ~/.config/asimeow/config.yaml
+        expand_tilde("~/.config/asimeow/config.yaml")?
+            .to_string_lossy()
+            .to_string()
+    };
+
+    // Check if the file already exists
+    let path_obj = Path::new(&config_path);
+    if path_obj.exists() {
+        return Err(anyhow::anyhow!("Config file already exists at: {}", config_path));
+    }
+
+    // Ensure the directory exists
+    ensure_dir_exists(&config_path)?;
+
     // Create a default config with common rules
     let config = Config {
         roots: vec![Root {
@@ -112,36 +133,80 @@ pub fn create_default_config(path: &str) -> Result<()> {
     let yaml =
         serde_yaml::to_string(&config).context("Failed to serialize default config to YAML")?;
 
-    // Check if the file already exists
-    let path_obj = Path::new(path);
-    if path_obj.exists() {
-        return Err(anyhow::anyhow!("Config file already exists at: {}", path));
-    }
-
     // Create the file and write the YAML content
-    let mut file = fs::File::create(path)
-        .with_context(|| format!("Failed to create config file at: {}", path))?;
+    let mut file = fs::File::create(&config_path)
+        .with_context(|| format!("Failed to create config file at: {}", config_path))?;
 
     file.write_all(yaml.as_bytes())
-        .with_context(|| format!("Failed to write to config file at: {}", path))?;
+        .with_context(|| format!("Failed to write to config file at: {}", config_path))?;
 
-    println!("✅ Created default config file at: {}", path);
+    println!("✅ Created default config file at: {}", config_path);
     println!("You may want to edit the file to customize the root paths for your system.");
 
     Ok(())
 }
 
-pub fn load_config(config_path: &str, verbose: bool) -> Result<Config> {
+/// Find the configuration file by checking:
+/// 1. The specified path (if provided)
+/// 2. The current directory
+/// 3. The ~/.config/asimeow/ directory
+pub fn find_config_file(specified_path: Option<&str>) -> Result<String> {
+    // If a specific path is provided, use that
+    if let Some(path) = specified_path {
+        if Path::new(path).exists() {
+            return Ok(path.to_string());
+        } else {
+            return Err(anyhow::anyhow!("Specified config file not found: {}", path));
+        }
+    }
+
+    // Check in current directory
+    let current_dir_config = "config.yaml";
+    if Path::new(current_dir_config).exists() {
+        return Ok(current_dir_config.to_string());
+    }
+
+    // Check in ~/.config/asimeow/
+    let home_config = expand_tilde("~/.config/asimeow/config.yaml")?;
+    if home_config.exists() {
+        return Ok(home_config.to_string_lossy().to_string());
+    }
+
+    // No config file found
+    Err(anyhow::anyhow!(
+        "No configuration file found. Run 'asimeow init' to create one in ~/.config/asimeow/ or 'asimeow init --local' for the current directory."
+    ))
+}
+
+/// Ensure the directory exists for a given file path
+fn ensure_dir_exists(file_path: &str) -> Result<()> {
+    let path = Path::new(file_path);
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
+        }
+    }
+    Ok(())
+}
+
+pub fn load_config(config_path: Option<&str>, verbose: bool) -> Result<(Config, String)> {
+    // Find the config file
+    let config_path_str = find_config_file(config_path)?;
+
+    // Print the configuration path
+    println!("Using configuration: {}", config_path_str);
+
     if verbose {
-        println!("Reading config from: {}", config_path);
+        println!("Reading config from: {}", config_path_str);
     }
 
     // Read and parse the config file
-    let config_content = fs::read_to_string(config_path)
-        .with_context(|| format!("Failed to read config file: {}", config_path))?;
+    let config_content = fs::read_to_string(&config_path_str)
+        .with_context(|| format!("Failed to read config file: {}", config_path_str))?;
 
     let config: Config = serde_yaml::from_str(&config_content)
-        .with_context(|| format!("Failed to parse config file: {}", config_path))?;
+        .with_context(|| format!("Failed to parse config file: {}", config_path_str))?;
 
     if verbose {
         println!("\nLoaded {} rules:", config.rules.len());
@@ -160,7 +225,7 @@ pub fn load_config(config_path: &str, verbose: bool) -> Result<Config> {
         return Err(anyhow::anyhow!("No root paths defined in config file"));
     }
 
-    Ok(config)
+    Ok((config, config_path_str))
 }
 
 pub fn expand_tilde(path: &str) -> Result<PathBuf> {

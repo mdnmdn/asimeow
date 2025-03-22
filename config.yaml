@@ -1,5 +1,5 @@
 roots:
-  - path: ~/works
+  - path: ~/works/projects
 
 rules:
   - name: "net"

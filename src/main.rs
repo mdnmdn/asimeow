@@ -31,7 +31,11 @@ struct Args {
 enum Commands {
     /// Initialize a new config file with default rules
     Init {
-        /// Path where to create the config file
+        /// Create config in the current directory instead of ~/.config/asimeow/
+        #[arg(long)]
+        local: bool,
+
+        /// Path where to create the config file (overrides --local)
         #[arg(short, long)]
         path: Option<String>,
     },
@@ -43,9 +47,8 @@ fn main() -> Result<()> {
     // Handle subcommands
     if let Some(command) = &args.command {
         match command {
-            Commands::Init { path } => {
-                let config_path = path.as_deref().unwrap_or(&args.config);
-                return config::create_default_config(config_path);
+            Commands::Init { local, path } => {
+                return config::create_default_config(*local, path.as_deref());
             }
         }
     }
@@ -57,7 +60,14 @@ fn main() -> Result<()> {
     }
 
     // Load the configuration
-    let config = config::load_config(&args.config, args.verbose)?;
+    // If -c/--config is specified, use that path; otherwise, find the config automatically
+    let config_path = if args.config != "config.yaml" {
+        Some(args.config.as_str())
+    } else {
+        None
+    };
+
+    let (config, _) = config::load_config(config_path, args.verbose)?;
 
     // Run the explorer with the loaded configuration
     explorer::run_explorer(config, args.threads, args.verbose)?;

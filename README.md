@@ -32,7 +32,7 @@ The executable will be available at `target/release/asimeow`.
 ## Usage
 
 ```bash
-# Use default config.yaml in current directory
+# Run with automatic config file detection
 ./asimeow
 
 # Specify a custom config file
@@ -43,9 +43,28 @@ The executable will be available at `target/release/asimeow`.
 
 # Specify number of worker threads (default: 4)
 ./asimeow -t 8
+
+# Create a default configuration file in ~/.config/asimeow/
+./asimeow init
+
+# Create a default configuration file in the current directory
+./asimeow init --local
+
+# Create a default configuration file at a specific path
+./asimeow init --path /path/to/config.yaml
 ```
 
 Note: This tool requires macOS and uses the `tmutil` command to manage Time Machine exclusions. You may need to run it with sudo for some operations.
+
+### Configuration File Location
+
+Asimeow looks for configuration files in the following order:
+
+1. Path specified with the `-c` or `--config` flag
+2. `config.yaml` in the current directory
+3. `~/.config/asimeow/config.yaml` in the user's home directory
+
+If no configuration file is found, Asimeow will display an error message with instructions on how to create one.
 
 ## Configuration
 
@@ -83,6 +102,34 @@ rules:
     file_match: "*.md"
     exclusions: []           # Empty exclusions list
 ```
+
+### Example Configuration
+
+Here's a minimal example of a configuration file:
+
+```yaml
+# Define the root directories to scan
+roots:
+  - path: ~/projects/  # Will be expanded to your home directory
+  - path: ~/work/      # You can specify multiple roots
+
+# Define rules for different project types
+rules:
+  # Node.js projects
+  - name: "node"
+    file_match: "package.json"
+    exclusions:
+      - "node_modules"
+      - "dist"
+
+  # Rust projects
+  - name: "rust"
+    file_match: "Cargo.toml"
+    exclusions:
+      - "target"
+```
+
+When you run `asimeow init`, a default configuration file will be created with common rules for various project types. You can then customize it to suit your needs.
 
 ### Configuration Options
 
