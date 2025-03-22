@@ -1,0 +1,33 @@
+roots:
+  - path: ~/works/projects/
+
+rules:
+  - name: "net"
+    file_match: "*.csproj"
+    exclusions:
+      - "obj"
+      - "bin"
+      - "packages"
+  - name: "rust"
+    file_match: "cargo.toml"
+    exclusions:
+      - "target"
+  - name: "go"
+    file_match: "go.mod"
+    exclusions:
+      - "vendor"
+  - name: "node"
+    file_match: "package.json"
+    exclusions:
+      - "node_modules"
+      - "dist"
+  - name: "python"
+    file_match: "requirements.txt"
+    exclusions:
+      - "__pycache__"
+      - ".venv"
+  - name: "java"
+    file_match: "pom.xml"
+    exclusions:
+      - "target"
+

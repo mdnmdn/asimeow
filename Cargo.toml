@@ -1,0 +1,19 @@
+[package]
+name = "asimaw"
+version = "0.1.0"
+edition = "2021"
+description = "A tool for analyzing folder structures based on rules"
+authors = ["Asimaw"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+walkdir = "2.3"
+glob = "0.3"
+anyhow = "1.0"
+clap = { version = "4.4", features = ["derive"] }
+dirs = "5.0"
+
+[[test]]
+name = "tests"
+path = "tests/mod.rs"
