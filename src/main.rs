@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
+use std::thread;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Config {
@@ -26,6 +27,10 @@ struct Rule {
 
 struct State {
     folder_queue: RwLock<Vec<PathBuf>>,
+    exclusion_found: RwLock<i32>,
+    processed_paths: RwLock<i32>,
+    active_tasks: RwLock<usize>,
+    processing_complete: RwLock<bool>,
 }
 
 #[derive(Parser, Debug)]
@@ -43,6 +48,10 @@ struct Args {
     /// Verbose output
     #[arg(short, long)]
     verbose: bool,
+
+    /// Number of worker threads
+    #[arg(short, long, default_value = "4")]
+    threads: usize,
 }
 
 fn main() -> Result<()> {
@@ -52,6 +61,7 @@ fn main() -> Result<()> {
         println!("Asimaw - Folder Analysis Tool");
         println!("-----------------------------");
         println!("Reading config from: {}", args.config);
+        println!("Using {} worker threads", args.threads);
     }
 
     // Read and parse the config file
@@ -80,33 +90,97 @@ fn main() -> Result<()> {
     // Create shared state
     let state = Arc::new(State {
         folder_queue: RwLock::new(Vec::new()),
+        exclusion_found: RwLock::new(0),
+        processed_paths: RwLock::new(0),
+        active_tasks: RwLock::new(0),
+        processing_complete: RwLock::new(false),
     });
 
-    // Process each root path
+    // We'll spawn threads directly instead of using a thread pool
+
+    // Process each root path and add to initial queue
     for root in &config.roots {
         let expanded_path = expand_tilde(&root.path)?;
 
-        // Process the root path
-        match process_path(&expanded_path, Arc::clone(&state), &config.rules, args.verbose) {
-            Ok(_) => {},
-            Err(e) => eprintln!("Error processing root path {}: {}", expanded_path.display(), e),
-        }
+        // Add root paths to the queue
+        let mut queue = state.folder_queue.write().unwrap();
+        queue.push(expanded_path);
     }
 
-    // Process all paths in the queue
-    loop {
-        let next_path = {
-            let mut queue = state.folder_queue.write().unwrap();
-            if queue.is_empty() {
-                break;
-            }
-            queue.remove(0)
-        };
+    // Create Arc-wrapped rules for sharing
+    let rules = Arc::new(config.rules);
 
-        match process_path(&next_path, Arc::clone(&state), &config.rules, args.verbose) {
-            Ok(_) => {},
-            Err(e) => eprintln!("Error processing path {}: {}", next_path.display(), e),
+    // Spawn worker threads to process the queue
+    for _ in 0..args.threads {
+        let state_clone = Arc::clone(&state);
+        let rules_clone = Arc::clone(&rules);
+        let verbose_clone = args.verbose;
+
+        thread::spawn(move || {
+            loop {
+                // Check if processing is complete
+                if *state_clone.processing_complete.read().unwrap() {
+                    break;
+                }
+
+                // Try to get a path from the queue
+                let next_path_option = {
+                    let mut queue = state_clone.folder_queue.write().unwrap();
+                    if !queue.is_empty() {
+                        // Increment active tasks counter
+                        let mut active = state_clone.active_tasks.write().unwrap();
+                        *active += 1;
+
+                        Some(queue.remove(0))
+                    } else {
+                        None
+                    }
+                };
+
+                if let Some(next_path) = next_path_option {
+                    // Process the path
+                    if let Err(e) = process_path(&next_path, Arc::clone(&state_clone), &rules_clone, verbose_clone) {
+                        eprintln!("Error processing path {}: {}", next_path.display(), e);
+                    }
+
+                    // Decrement active tasks counter
+                    let mut active = state_clone.active_tasks.write().unwrap();
+                    *active -= 1;
+                } else {
+                    // No paths in queue, check if we're done
+                    let active_count = *state_clone.active_tasks.read().unwrap();
+                    let queue_empty = state_clone.folder_queue.read().unwrap().is_empty();
+
+                    if queue_empty && active_count == 0 {
+                        // No more work to do, mark processing as complete
+                        let mut complete = state_clone.processing_complete.write().unwrap();
+                        *complete = true;
+                        break;
+                    }
+
+                    // No work available right now, wait a bit
+                    thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
+        });
+    }
+
+    // Wait for all processing to complete
+    loop {
+        let processing_done = *state.processing_complete.read().unwrap();
+        if processing_done {
+            break;
         }
+        thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    // Print the total number of exclusions found and processed paths
+    let exclusions_count = *state.exclusion_found.read().unwrap();
+    let processed_count = *state.processed_paths.read().unwrap();
+
+    if args.verbose || exclusions_count > 0 {
+        println!("\nTotal paths processed: {}", processed_count);
+        println!("Total exclusions found: {}", exclusions_count);
     }
 
     Ok(())
@@ -122,12 +196,16 @@ fn expand_tilde(path: &str) -> Result<PathBuf> {
     }
 }
 
-fn process_exclusion(path: &Path, rule: &Rule) {
+fn process_exclusion(path: &Path, rule: &Rule, state: &Arc<State>) {
     // Print in the requested format: /path/to/excluded/dir - rule-name
     for exclusion in &rule.exclusions {
         let exclusion_path = path.join(exclusion);
         if exclusion_path.exists() {
             println!("{} - {}", exclusion_path.display(), rule.name);
+
+            // Increment the exclusion_found counter
+            let mut counter = state.exclusion_found.write().unwrap();
+            *counter += 1;
         }
     }
 }
@@ -148,13 +226,24 @@ fn process_path(path: &Path, state: Arc<State>, rules: &[Rule], verbose: bool) -
         return Ok(());
     }
 
+    // Increment the processed_paths counter
+    {
+        let mut counter = state.processed_paths.write().unwrap();
+        *counter += 1;
+    }
+
     if verbose {
         println!("Processing path: {}", path.display());
     }
 
     // Check if the current directory contains files matching any rule
-    let entries = fs::read_dir(path)
-        .with_context(|| format!("Failed to read directory: {}", path.display()))?;
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(e) => {
+            eprintln!("Failed to read directory {}: {}", path.display(), e);
+            return Ok(());
+        }
+    };
 
     let mut subdirs = Vec::new();
 
@@ -176,8 +265,6 @@ fn process_path(path: &Path, state: Arc<State>, rules: &[Rule], verbose: bool) -
             .to_string_lossy()
             .to_lowercase();
 
-
-
         // Check if this entry matches any rule
         for rule in rules {
             let pattern = match Pattern::new(&rule.file_match.to_lowercase()) {
@@ -195,9 +282,8 @@ fn process_path(path: &Path, state: Arc<State>, rules: &[Rule], verbose: bool) -
                 if verbose {
                     println!("Found match for rule '{}' at: {}", rule.name, entry_path.display());
                 }
-                // matched_rules.push(rule);
-                process_exclusion(path, rule);
-                continue;
+                process_exclusion(path, rule, &state);
+                break; // Found a match for this entry, no need to check other rules
             }
         }
 
@@ -207,8 +293,7 @@ fn process_path(path: &Path, state: Arc<State>, rules: &[Rule], verbose: bool) -
         }
     }
 
-
-    // Add subdirectories to the queue if no rules matched
+    // Add subdirectories to the queue
     if !subdirs.is_empty() {
         let mut queue = state.folder_queue.write().unwrap();
         for subdir in subdirs {
