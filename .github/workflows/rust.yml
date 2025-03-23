@@ -190,6 +190,7 @@ jobs:
           repository: mdnmdn/homebrew-asimeow
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: homebrew-tap
+          fetch-depth: 0
 
       - name: Download release assets to calculate SHA256
         run: |
@@ -207,6 +208,9 @@ jobs:
           echo "INTEL_SHA256=$INTEL_SHA256" >> $GITHUB_OUTPUT
           echo "ARM_SHA256=$ARM_SHA256" >> $GITHUB_OUTPUT
           echo "SOURCE_SHA256=$SOURCE_SHA256" >> $GITHUB_OUTPUT
+
+      - name: Ensure Formula directory exists
+        run: mkdir -p homebrew-tap/Formula
 
       - name: Update formula
         run: |
@@ -291,8 +295,14 @@ jobs:
       - name: Commit and push updated formula
         run: |
           cd homebrew-tap
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-          git add Formula/asimeow.rb
-          git commit -m "Update asimeow to v${{ steps.get_version.outputs.VERSION }}"
-          git push
+          git config user.name "GitHub Actions Bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Check if there are changes to commit
+          if git diff --quiet; then
+            echo "No changes to commit"
+          else
+            git add Formula/asimeow.rb
+            git commit -m "Update asimeow to v${{ steps.get_version.outputs.VERSION }}"
+            git push origin HEAD:main
+          fi
