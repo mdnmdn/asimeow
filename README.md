@@ -17,6 +17,18 @@ A command-line tool that automatically manages macOS Time Machine exclusions for
 
 ## Installation
 
+### Using Homebrew
+
+```bash
+brew tap mdnmdn/asimeow
+brew install asimeow
+```
+
+To run asimeow as a scheduled service:
+
+```bash
+brew services start asimeow
+```
 
 ### From GitHub Releases
 
@@ -137,6 +149,7 @@ roots:
 # Define directories to ignore during exploration
 ignore:
   - .git              # Common directories to skip
+  - node_modules      # You can add any directory patterns to ignore
 
 # Define rules for different project types
 rules:
@@ -261,4 +274,6 @@ This project uses GitHub Actions for continuous integration and deployment:
 
 ## Acknowledgments
 
-Many thanks and kudos to the inspiring project [Asimov](https://github.com/stevegrunwell/asimov) by Steve Grunwell, which provided the original concept for this tool. Asimeow extends the idea with multi-threading, rule-based detection, and a more developer-focused approach.
+Many thanks and kudos to the inspiring project [Asimov](https://github.com/stevegrunwell/asimov) by Steve Grunwell, which provided the original
+concept for this tool. Asimeow extends the idea with multi-threading, rule-based detection, 
+and a more developer-focused approach.
