@@ -135,7 +135,7 @@ jobs:
           for dir in */; do
             dir=${dir%/}
             chmod +x "$dir/asimeow"
-            zip -j "$dir.zip" "$dir/asimeowr"
+            zip -j "$dir.zip" "$dir/asimeow"
           done
 
       - name: Create Release
