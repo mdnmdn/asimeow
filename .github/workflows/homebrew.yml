@@ -120,7 +120,7 @@ jobs:
           cd homebrew-asimeow
           git config user.name "GitHub Action"
           git config user.email "action@github.com"
-          git add asimeow.rb
+          git add Formula/asimeow.rb
           git commit -m "Update formula to v${{ steps.version.outputs.VERSION }}"
           git push
 
