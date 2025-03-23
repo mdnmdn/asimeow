@@ -50,7 +50,7 @@ fn main() -> Result<()> {
         match command {
             Commands::Init { local, path } => {
                 return config::create_default_config(*local, path.as_deref());
-            },
+            }
             Commands::Version => {
                 println!("Asimeow version {}", env!("CARGO_PKG_VERSION"));
                 return Ok(());
