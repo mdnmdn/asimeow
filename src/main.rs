@@ -6,7 +6,6 @@ use clap::{Parser, Subcommand};
 #[derive(Parser, Debug)]
 #[command(
     author = "mdnmdn",
-    version = "0.1.7",
     about = "A tool for managing macOS Time Machine exclusions for developer projects",
     long_about = None
 )]
@@ -39,6 +38,8 @@ enum Commands {
         #[arg(short, long)]
         path: Option<String>,
     },
+    /// Print the current version
+    Version,
 }
 
 fn main() -> Result<()> {
@@ -49,6 +50,10 @@ fn main() -> Result<()> {
         match command {
             Commands::Init { local, path } => {
                 return config::create_default_config(*local, path.as_deref());
+            },
+            Commands::Version => {
+                println!("Asimeow version {}", env!("CARGO_PKG_VERSION"));
+                return Ok(());
             }
         }
     }
