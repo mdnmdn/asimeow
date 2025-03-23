@@ -1,4 +1,4 @@
-name: Update Homebrew Formula
+name: CI - Publish Homebrew Tap
 
 on:
   release:
