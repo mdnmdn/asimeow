@@ -256,7 +256,7 @@ Developers often have large directories of build artifacts, dependencies, and ge
 
 Asimeow automatically identifies and excludes these directories based on project types, saving backup space and improving Time Machine performance.
 
-### Roadmap
+## Roadmap
 
 - [ ] Analyze current time machine exclusions of specific paths
 - [ ] Analyze exclusion folder "decay" in order to identify old and unused exclusions and clean from disk
