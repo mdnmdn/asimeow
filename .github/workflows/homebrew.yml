@@ -83,10 +83,12 @@ jobs:
           
           cd homebrew-asimeow
           
+          mkdir -p Formula
+          
           # Create or update formula file
-          cat > asimeow.rb << EOF
+          cat > Formula/asimeow.rb << EOF
           class Asimeow < Formula
-            desc "ASCII art cat generator in Rust"
+            desc "A tool for managing macOS Time Machine exclusions for developer projects"
             homepage "https://github.com/${{ github.repository }}"
             version "$VERSION"
             license "MIT"  # Replace with your actual license
