@@ -2,7 +2,7 @@
 name = "asimeow"
 version = "0.1.9"
 edition = "2021"
-description = "A tool for managing macOS Time Machine exclusions for developer projects"
+description = "A tool for managing macOS Time Machine exclusions for developer's workspaces"
 authors = ["mdnmdn"]
 license = "MIT"
 repository = "https://github.com/mdnmdn/asimeow"

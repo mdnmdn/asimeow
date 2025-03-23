@@ -19,7 +19,7 @@ artifacts from Time Machine backups.
 
 Many thanks and kudos to the inspiring project [Asimov](https://github.com/stevegrunwell/asimov) by Steve Grunwell,
 which provided the original concept for this tool. Asimeow tries to extends the (great) original idea with configurable
-and more flexible rules and multi-threading tree traversal. 
+and more flexible rules, multi-threaded tree traversal and processing. 
 
 
 ## Installation
@@ -256,9 +256,17 @@ Developers often have large directories of build artifacts, dependencies, and ge
 
 Asimeow automatically identifies and excludes these directories based on project types, saving backup space and improving Time Machine performance.
 
+### Roadmap
+
+- [ ] Analyze current time machine exclusions of specific paths
+- [ ] Analyze exclusion folder "decay" in order to identify old and unused exclusions and clean from disk
+- [ ] Provide detailed statistics about excluded directories and their sizes
+- [ ] Improve tests 
+- [ ] Simplify access to configuration via cli options
+
 ## Contributing
 
-Contributions are welcome! [Here's how you can contribute to Asimeow](_docs/contributing.md):
+Contributions are welcome! [Here's how you can contribute to Asimeow](CONTRIBUTING.md):
 
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature/my-new-feature`
