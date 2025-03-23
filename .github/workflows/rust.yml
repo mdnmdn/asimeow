@@ -151,6 +151,13 @@ jobs:
 
             ### Installation
 
+            #### Homebrew
+            
+            ```bash
+            brew tap mdnmdn/asimeow
+            brew install asimeow
+            ```
+
             #### Manual Installation
             Download the appropriate binary for your system:
             - Intel Mac: asimeow-x86_64-apple-darwin.zip
@@ -164,3 +171,138 @@ jobs:
             ```
 
             See [CHANGELOG.md](https://github.com/mdnmdn/asimeow/blob/main/CHANGELOG.md) for details on changes in this release.
+
+  update-homebrew:
+    name: Update Homebrew Formula
+    needs: create-release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Checkout homebrew tap repository
+        uses: actions/checkout@v3
+        with:
+          repository: mdnmdn/homebrew-asimeow
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+          fetch-depth: 0
+
+      - name: Download release assets to calculate SHA256
+        run: |
+          mkdir -p downloads
+          curl -L -o downloads/asimeow-x86_64-apple-darwin.zip https://github.com/mdnmdn/asimeow/releases/download/v${{ steps.get_version.outputs.VERSION }}/asimeow-x86_64-apple-darwin.zip
+          curl -L -o downloads/asimeow-aarch64-apple-darwin.zip https://github.com/mdnmdn/asimeow/releases/download/v${{ steps.get_version.outputs.VERSION }}/asimeow-aarch64-apple-darwin.zip
+          curl -L -o downloads/source.tar.gz https://github.com/mdnmdn/asimeow/archive/refs/tags/v${{ steps.get_version.outputs.VERSION }}.tar.gz
+
+      - name: Calculate SHA256 hashes
+        id: sha256
+        run: |
+          INTEL_SHA256=$(sha256sum downloads/asimeow-x86_64-apple-darwin.zip | awk '{print $1}')
+          ARM_SHA256=$(sha256sum downloads/asimeow-aarch64-apple-darwin.zip | awk '{print $1}')
+          SOURCE_SHA256=$(sha256sum downloads/source.tar.gz | awk '{print $1}')
+          echo "INTEL_SHA256=$INTEL_SHA256" >> $GITHUB_OUTPUT
+          echo "ARM_SHA256=$ARM_SHA256" >> $GITHUB_OUTPUT
+          echo "SOURCE_SHA256=$SOURCE_SHA256" >> $GITHUB_OUTPUT
+
+      - name: Ensure Formula directory exists
+        run: mkdir -p homebrew-tap/Formula
+
+      - name: Update formula
+        run: |
+          cat > homebrew-tap/Formula/asimeow.rb << EOF
+          class Asimeow < Formula
+            desc "A tool for managing macOS Time Machine exclusions for developer projects"
+            homepage "https://github.com/mdnmdn/asimeow"
+            version "${{ steps.get_version.outputs.VERSION }}"
+            license "MIT"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/mdnmdn/asimeow/releases/download/v#{version}/asimeow-aarch64-apple-darwin.zip"
+                sha256 "${{ steps.sha256.outputs.ARM_SHA256 }}"
+              elsif Hardware::CPU.intel?
+                url "https://github.com/mdnmdn/asimeow/releases/download/v#{version}/asimeow-x86_64-apple-darwin.zip"
+                sha256 "${{ steps.sha256.outputs.INTEL_SHA256 }}"
+              end
+            end
+
+            # Fallback to source code if no binary is available
+            resource "source" do
+              url "https://github.com/mdnmdn/asimeow/archive/refs/tags/v#{version}.tar.gz"
+              sha256 "${{ steps.sha256.outputs.SOURCE_SHA256 }}"
+            end
+
+            depends_on "rust" => :build
+
+            def install
+              if Hardware::CPU.arm? || Hardware::CPU.intel?
+                # Binary installation
+                bin.install "asimeow"
+              else
+                # Source installation as fallback
+                resource("source").stage do
+                  system "cargo", "install", "--locked", "--root", prefix, "--path", "."
+                end
+              end
+
+              # Install the launchd plist file
+              (prefix/"homebrew.mxcl.asimeow.plist").write launchd_plist
+            end
+
+            def launchd_plist
+              <<~EOS
+                <?xml version="1.0" encoding="UTF-8"?>
+                <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+                <plist version="1.0">
+                    <dict>
+                        <key>Label</key>
+                        <string>homebrew.mxcl.asimeow</string>
+                        <key>Program</key>
+                        <string>#{opt_bin}/asimeow</string>
+                        <key>StartCalendarInterval</key>
+                       <dict>
+                         <key>Hour</key>
+                         <integer>23</integer>
+                         <key>Minute</key>
+                         <integer>11</integer>
+                       </dict>
+                    </dict>
+                </plist>
+              EOS
+            end
+
+            def caveats
+              <<~EOS
+                To have launchd start asimeow now and restart at login:
+                  brew services start asimeow
+
+                Or, if you don't want/need a background service you can just run:
+                  asimeow
+              EOS
+            end
+
+            test do
+              system "#{bin}/asimeow", "--version"
+            end
+          end
+          EOF
+
+      - name: Commit and push updated formula
+        run: |
+          cd homebrew-tap
+          git config user.name "GitHub Actions Bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Check if there are changes to commit
+          if git diff --quiet; then
+            echo "No changes to commit"
+          else
+            git add Formula/asimeow.rb
+            git commit -m "Update asimeow to v${{ steps.get_version.outputs.VERSION }}"
+            git push origin HEAD:main
+          fi
