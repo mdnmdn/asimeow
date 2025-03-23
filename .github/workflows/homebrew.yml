@@ -1,0 +1,56 @@
+name: Update Homebrew Formula
+
+on:
+#  release:
+#    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to use (without v prefix, e.g., 0.1.0)'
+        required: true
+        default: ''
+      force_update:
+        description: 'Force update even if version exists'
+        type: boolean
+        default: false
+
+jobs:
+  update-homebrew:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Set up Git
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+
+      - name: Get release info
+        id: release_info
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          TARBALL_URL="https://github.com/mdnmdn/asimeow/archive/refs/tags/v$VERSION.tar.gz"
+          echo "tarball_url=$TARBALL_URL" >> $GITHUB_OUTPUT
+          
+          # Download the tarball and calculate SHA256
+          curl -sL "$TARBALL_URL" -o asimeow-$VERSION.tar.gz
+          SHA256=$(sha256sum asimeow-$VERSION.tar.gz | awk '{print $1}')
+          echo "sha256=$SHA256" >> $GITHUB_OUTPUT
+
+      - name: Update Homebrew formula
+        run: |
+          VERSION=${{ steps.release_info.outputs.version }}
+          TARBALL_URL=${{ steps.release_info.outputs.tarball_url }}
+          SHA256=${{ steps.release_info.outputs.sha256 }}
+          
+          # Update the formula with the new version and SHA256
+          sed -i "s|url \".*\"|url \"$TARBALL_URL\"|g" Formula/asimeow.rb
+          sed -i "s|sha256 \".*\"|sha256 \"$SHA256\"|g" Formula/asimeow.rb
+          
+          git add Formula/asimeow.rb
+          git commit -m "Update Homebrew formula to v$VERSION"
+          git push origin main
