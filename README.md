@@ -41,8 +41,8 @@ brew services start asimeow
 ```bash
 # Example
 unzip asimeow-x86_64-apple-darwin.zip
-chmod +x asimeow-x86_64-apple-darwin
-sudo mv asimeow-x86_64-apple-darwin /usr/local/bin/asimeow
+chmod +x asimeow
+sudo mv asimeow /usr/local/bin/asimeow
 ```
 
 ### From crates.io
