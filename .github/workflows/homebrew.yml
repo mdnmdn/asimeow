@@ -15,7 +15,7 @@ on:
         default: false
 
 jobs:
-  update-formula:
+  update-homebrew:
     runs-on: ubuntu-latest
     steps:
       - name: Extract Version

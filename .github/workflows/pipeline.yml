@@ -173,136 +173,119 @@ jobs:
             See [CHANGELOG.md](https://github.com/mdnmdn/asimeow/blob/main/CHANGELOG.md) for details on changes in this release.
 
   update-homebrew:
-    name: Update Homebrew Formula
-    needs: create-release
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
-      - name: Get version from tag
-        id: get_version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+      - name: Extract Version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            echo "Using manually provided version: ${{ github.event.inputs.version }}"
+          else
+            VERSION=${GITHUB_REF#refs/tags/v}
+            echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+            echo "Using version from tag: $VERSION"
+          fi
 
-      - name: Checkout homebrew tap repository
+      - name: Check if assets exist
+        id: check_assets
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" https://github.com/${{ github.repository }}/releases/download/v$VERSION/asimeow-x86_64-apple-darwin.zip)
+          
+          if [ "$HTTP_CODE" == "200" ] || [ "${{ github.event.inputs.force_update }}" == "true" ]; then
+            echo "ASSETS_EXIST=true" >> $GITHUB_OUTPUT
+            echo "Assets exist or force update enabled, proceeding with formula update"
+          else
+            echo "ASSETS_EXIST=false" >> $GITHUB_OUTPUT
+            echo "Assets don't exist for version v$VERSION, aborting"
+            exit 1
+          fi
+
+      - name: Download release assets and compute SHA256
+        id: sha256
+        if: steps.check_assets.outputs.ASSETS_EXIST == 'true'
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          
+          # Download each asset and compute SHA256
+          mkdir -p tmp
+          
+          # macOS ARM64
+          curl -L -o tmp/macos-arm64.zip https://github.com/${{ github.repository }}/releases/download/v$VERSION/asimeow-aarch64-apple-darwin.zip
+          MACOS_ARM64_SHA256=$(sha256sum tmp/macos-arm64.zip | cut -d ' ' -f 1)
+          
+          # macOS x86_64
+          curl -L -o tmp/macos-x86.zip https://github.com/${{ github.repository }}/releases/download/v$VERSION/asimeow-x86_64-apple-darwin.zip
+          MACOS_X86_SHA256=$(sha256sum tmp/macos-x86.zip | cut -d ' ' -f 1)
+          
+          # Export SHA256 values
+          echo "MACOS_ARM64_SHA256=$MACOS_ARM64_SHA256" >> $GITHUB_OUTPUT
+          echo "MACOS_X86_SHA256=$MACOS_X86_SHA256" >> $GITHUB_OUTPUT
+
+      - name: Checkout homebrew tap
+        if: steps.check_assets.outputs.ASSETS_EXIST == 'true'
         uses: actions/checkout@v3
         with:
           repository: mdnmdn/homebrew-asimeow
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          path: homebrew-tap
-          fetch-depth: 0
-
-      - name: Download release assets to calculate SHA256
-        run: |
-          mkdir -p downloads
-          curl -L -o downloads/asimeow-x86_64-apple-darwin.zip https://github.com/mdnmdn/asimeow/releases/download/v${{ steps.get_version.outputs.VERSION }}/asimeow-x86_64-apple-darwin.zip
-          curl -L -o downloads/asimeow-aarch64-apple-darwin.zip https://github.com/mdnmdn/asimeow/releases/download/v${{ steps.get_version.outputs.VERSION }}/asimeow-aarch64-apple-darwin.zip
-          curl -L -o downloads/source.tar.gz https://github.com/mdnmdn/asimeow/archive/refs/tags/v${{ steps.get_version.outputs.VERSION }}.tar.gz
-
-      - name: Calculate SHA256 hashes
-        id: sha256
-        run: |
-          INTEL_SHA256=$(sha256sum downloads/asimeow-x86_64-apple-darwin.zip | awk '{print $1}')
-          ARM_SHA256=$(sha256sum downloads/asimeow-aarch64-apple-darwin.zip | awk '{print $1}')
-          SOURCE_SHA256=$(sha256sum downloads/source.tar.gz | awk '{print $1}')
-          echo "INTEL_SHA256=$INTEL_SHA256" >> $GITHUB_OUTPUT
-          echo "ARM_SHA256=$ARM_SHA256" >> $GITHUB_OUTPUT
-          echo "SOURCE_SHA256=$SOURCE_SHA256" >> $GITHUB_OUTPUT
-
-      - name: Ensure Formula directory exists
-        run: mkdir -p homebrew-tap/Formula
+          token: ${{ secrets.TAP_REPO_TOKEN }}
+          path: homebrew-asimeow
 
       - name: Update formula
+        if: steps.check_assets.outputs.ASSETS_EXIST == 'true'
         run: |
-          cat > homebrew-tap/Formula/asimeow.rb << EOF
+          VERSION=${{ steps.version.outputs.VERSION }}
+          MACOS_ARM64_SHA256=${{ steps.sha256.outputs.MACOS_ARM64_SHA256 }}
+          MACOS_X86_SHA256=${{ steps.sha256.outputs.MACOS_X86_SHA256 }}
+          
+          cd homebrew-asimeow
+          
+          mkdir -p Formula
+          
+          # Create or update formula file
+          cat > Formula/asimeow.rb << EOF
           class Asimeow < Formula
             desc "A tool for managing macOS Time Machine exclusions for developer projects"
-            homepage "https://github.com/mdnmdn/asimeow"
-            version "${{ steps.get_version.outputs.VERSION }}"
-            license "MIT"
-
+            homepage "https://github.com/${{ github.repository }}"
+            version "$VERSION"
+            license "MIT"  # Replace with your actual license
+          
             on_macos do
               if Hardware::CPU.arm?
-                url "https://github.com/mdnmdn/asimeow/releases/download/v#{version}/asimeow-aarch64-apple-darwin.zip"
-                sha256 "${{ steps.sha256.outputs.ARM_SHA256 }}"
-              elsif Hardware::CPU.intel?
-                url "https://github.com/mdnmdn/asimeow/releases/download/v#{version}/asimeow-x86_64-apple-darwin.zip"
-                sha256 "${{ steps.sha256.outputs.INTEL_SHA256 }}"
-              end
-            end
-
-            # Fallback to source code if no binary is available
-            resource "source" do
-              url "https://github.com/mdnmdn/asimeow/archive/refs/tags/v#{version}.tar.gz"
-              sha256 "${{ steps.sha256.outputs.SOURCE_SHA256 }}"
-            end
-
-            depends_on "rust" => :build
-
-            def install
-              if Hardware::CPU.arm? || Hardware::CPU.intel?
-                # Binary installation
-                bin.install "asimeow"
+                url "https://github.com/${{ github.repository }}/releases/download/v$VERSION/asimeow-aarch64-apple-darwin.zip"
+                sha256 "$MACOS_ARM64_SHA256"
               else
-                # Source installation as fallback
-                resource("source").stage do
-                  system "cargo", "install", "--locked", "--root", prefix, "--path", "."
-                end
+                url "https://github.com/${{ github.repository }}/releases/download/v$VERSION/asimeow-x86_64-apple-darwin.zip"
+                sha256 "$MACOS_X86_SHA256"
               end
-
-              # Install the launchd plist file
-              (prefix/"homebrew.mxcl.asimeow.plist").write launchd_plist
             end
-
-            def launchd_plist
-              <<~EOS
-                <?xml version="1.0" encoding="UTF-8"?>
-                <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-                <plist version="1.0">
-                    <dict>
-                        <key>Label</key>
-                        <string>homebrew.mxcl.asimeow</string>
-                        <key>Program</key>
-                        <string>#{opt_bin}/asimeow</string>
-                        <key>StartCalendarInterval</key>
-                       <dict>
-                         <key>Hour</key>
-                         <integer>23</integer>
-                         <key>Minute</key>
-                         <integer>11</integer>
-                       </dict>
-                    </dict>
-                </plist>
-              EOS
+          
+            def install
+              bin.install "asimeow"
+              # Add any other files you want to install
             end
-
-            def caveats
-              <<~EOS
-                To have launchd start asimeow now and restart at login:
-                  brew services start asimeow
-
-                Or, if you don't want/need a background service you can just run:
-                  asimeow
-              EOS
-            end
-
+          
             test do
-              system "#{bin}/asimeow", "--version"
+              system "#{bin}/asimeow", "--help"
             end
           end
           EOF
 
-      - name: Commit and push updated formula
+      - name: Commit and push changes
+        if: steps.check_assets.outputs.ASSETS_EXIST == 'true'
         run: |
-          cd homebrew-tap
-          git config user.name "GitHub Actions Bot"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          cd homebrew-asimeow
+          git config user.name "GitHub Action"
+          git config user.email "action@github.com"
+          git add Formula/asimeow.rb
+          git commit -m "Update formula to v${{ steps.version.outputs.VERSION }}"
+          git push
 
-          # Check if there are changes to commit
-          if git diff --quiet; then
-            echo "No changes to commit"
+      - name: Set output status
+        if: always()
+        run: |
+          if [ "${{ steps.check_assets.outputs.ASSETS_EXIST }}" == "true" ]; then
+            echo "✅ Formula updated successfully to version ${{ steps.version.outputs.VERSION }}"
           else
-            git add Formula/asimeow.rb
-            git commit -m "Update asimeow to v${{ steps.get_version.outputs.VERSION }}"
-            git push origin HEAD:main
+            echo "❌ Failed to update formula. Assets don't exist for version ${{ steps.version.outputs.VERSION }}"
           fi
