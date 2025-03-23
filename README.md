@@ -4,15 +4,23 @@
 [![Crates.io](https://img.shields.io/crates/v/asimeow.svg)](https://crates.io/crates/asimeow)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A command-line tool that automatically manages macOS Time Machine exclusions for developer projects. It recursively analyzes folders according to rules defined in a configuration file and excludes development artifacts from Time Machine backups.
+A command-line tool that automatically manages macOS Time Machine exclusions for developer projects.
+It recursively analyzes folders according to rules defined in a configuration file and excludes development
+artifacts from Time Machine backups.
 
 ## Features
 
 - Recursively explores directories from specified root paths
 - Identifies files matching patterns defined in rules (like package.json, cargo.toml, etc.)
 - Automatically excludes development artifacts from Time Machine backups
-- Shows which directories were newly excluded vs. already excluded
 - Multi-threaded for fast processing of large directory structures
+
+## Acknowledgments
+
+Many thanks and kudos to the inspiring project [Asimov](https://github.com/stevegrunwell/asimov) by Steve Grunwell,
+which provided the original concept for this tool. Asimeow tries to extends the (great) original idea with configurable
+and more flexible rules and multi-threading tree traversal. 
+
 
 ## Installation
 
@@ -267,8 +275,3 @@ This project uses GitHub Actions for continuous integration and deployment:
 - Code formatting and linting are checked using `cargo fmt` and `clippy`
 - When a new version tag (v*) is pushed, the package is automatically published to crates.io
 
-## Acknowledgments
-
-Many thanks and kudos to the inspiring project [Asimov](https://github.com/stevegrunwell/asimov) by Steve Grunwell,
-which provided the original concept for this tool. Asimeow extends the idea with multi-threading, rule-based detection, 
-and a more developer-focused approach.
