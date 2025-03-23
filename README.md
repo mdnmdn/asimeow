@@ -13,7 +13,6 @@ A command-line tool that automatically manages macOS Time Machine exclusions for
 - Automatically excludes development artifacts from Time Machine backups
 - Shows which directories were newly excluded vs. already excluded
 - Multi-threaded for fast processing of large directory structures
-- Skips exploring excluded directories
 
 ## Installation
 
@@ -131,9 +130,6 @@ rules:
       - "venv"
       - "__pycache__"
       - ".pytest_cache"
-  - name: "markdown"         # Rule with no exclusions
-    file_match: "*.md"
-    exclusions: []           # Empty exclusions list
 ```
 
 ### Example Configuration
@@ -149,7 +145,6 @@ roots:
 # Define directories to ignore during exploration
 ignore:
   - .git              # Common directories to skip
-  - node_modules      # You can add any directory patterns to ignore
 
 # Define rules for different project types
 rules:
@@ -255,7 +250,7 @@ Asimeow automatically identifies and excludes these directories based on project
 
 ## Contributing
 
-Contributions are welcome! Here's how you can contribute to Asimeow:
+Contributions are welcome! [Here's how you can contribute to Asimeow](_docs/contributing.md):
 
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature/my-new-feature`
@@ -274,6 +269,6 @@ This project uses GitHub Actions for continuous integration and deployment:
 
 ## Acknowledgments
 
-Many thanks and kudos to the inspiring project [Asimov](https://github.com/stevegrunwell/asimov) by Steve Grunwell, which provided the original
-concept for this tool. Asimeow extends the idea with multi-threading, rule-based detection, 
+Many thanks and kudos to the inspiring project [Asimov](https://github.com/stevegrunwell/asimov) by Steve Grunwell,
+which provided the original concept for this tool. Asimeow extends the idea with multi-threading, rule-based detection, 
 and a more developer-focused approach.
