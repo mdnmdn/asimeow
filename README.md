@@ -1,6 +1,6 @@
 # Asimeow
 
-[![Rust CI/CD](https://github.com/mdnmdn/asimeow/actions/workflows/rust.yml/badge.svg)](https://github.com/mdnmdn/asimeow/actions/workflows/rust.yml)
+[![CI/CD](https://github.com/mdnmdn/asimeow/actions/workflows/pipeline.yml/badge.svg)](https://github.com/mdnmdn/asimeow/actions/workflows/rust.yml)
 [![Crates.io](https://img.shields.io/crates/v/asimeow.svg)](https://crates.io/crates/asimeow)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
