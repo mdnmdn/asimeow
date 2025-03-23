@@ -88,26 +88,26 @@ jobs:
           path: release/${{ env.BINARY_NAME }}-${{ matrix.target }}
           if-no-files-found: error
 
-  publish-create:
-    name: Publish to crates.io
-    needs: test
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-
-      - name: Publish to crates.io
-        uses: actions-rs/cargo@v1
-        with:
-          command: publish
-          args: --token ${{ secrets.CRATES_IO_TOKEN }}
+#  publish-create:
+#    name: Publish to crates.io
+#    needs: test
+#    if: startsWith(github.ref, 'refs/tags/v')
+#    runs-on: ubuntu-latest
+#    steps:
+#      - uses: actions/checkout@v3
+#
+#      - name: Install Rust toolchain
+#        uses: actions-rs/toolchain@v1
+#        with:
+#          profile: minimal
+#          toolchain: stable
+#          override: true
+#
+#      - name: Publish to crates.io
+#        uses: actions-rs/cargo@v1
+#        with:
+#          command: publish
+#          args: --token ${{ secrets.CRATES_IO_TOKEN }}
 
   create-release:
     name: Create GitHub Release
@@ -194,7 +194,7 @@ jobs:
           VERSION=${{ steps.version.outputs.VERSION }}
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" https://github.com/${{ github.repository }}/releases/download/v$VERSION/asimeow-x86_64-apple-darwin.zip)
           
-          if [ "$HTTP_CODE" == "200" ] || [ "${{ github.event.inputs.force_update }}" == "true" ]; then
+          if [ "$HTTP_CODE" == "200" ] ||  [ "$HTTP_CODE" == "302" ] ||  [ "${{ github.event.inputs.force_update }}" == "true" ]; then
             echo "ASSETS_EXIST=true" >> $GITHUB_OUTPUT
             echo "Assets exist or force update enabled, proceeding with formula update"
           else
