@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 #[derive(Parser, Debug)]
 #[command(
     author = "mdnmdn",
-    version = "0.1.6",
+    version = "0.1.7",
     about = "A tool for managing macOS Time Machine exclusions for developer projects",
     long_about = None
 )]
