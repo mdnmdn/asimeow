@@ -134,8 +134,8 @@ jobs:
           # Create zip files for each binary
           for dir in */; do
             dir=${dir%/}
-            chmod +x "$dir/$dir"
-            zip -j "$dir.zip" "$dir/$dir"
+            chmod +x "$dir/asimeow"
+            zip -j "$dir.zip" "$dir/asimeowr"
           done
 
       - name: Create Release
