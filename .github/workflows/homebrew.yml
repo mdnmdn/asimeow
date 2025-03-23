@@ -94,7 +94,6 @@ jobs:
             on_macos do
               if Hardware::CPU.arm?
                 url "https://github.com/${{ github.repository }}/releases/download/v$VERSION/asimeow-aarch64-apple-darwin.zip"
-                     https://github.com/mdnmdn/asimeow/releases/download/v0.1.4/asimeow-aarch64-apple-darwin.zip
                 sha256 "$MACOS_ARM64_SHA256"
               else
                 url "https://github.com/${{ github.repository }}/releases/download/v$VERSION/asimeow-x86_64-apple-darwin.zip"
