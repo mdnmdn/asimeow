@@ -266,6 +266,15 @@ jobs:
               # Add any other files you want to install
             end
           
+            service do
+              run [opt_bin/"asimeow"]
+              run_type :interval
+              interval 21600 # 6 hours in seconds (6 * 60 * 60)
+              log_path var/"log/asimeow.log"
+              error_log_path var/"log/asimeow.log"
+              working_dir HOMEBREW_PREFIX
+            end
+          
             test do
               system "#{bin}/asimeow", "--help"
             end

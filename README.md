@@ -17,9 +17,11 @@ artifacts from Time Machine backups.
 
 ## Acknowledgments
 
-Many thanks and kudos to the inspiring project [Asimov](https://github.com/stevegrunwell/asimov) by Steve Grunwell,
-which provided the original concept for this tool. Asimeow tries to extends the (great) original idea with configurable
-and more flexible rules, multi-threaded tree traversal and processing. 
+Many thanks and kudos to Steve Grunwell and it's inspiring [asimov](https://github.com/stevegrunwell/asimov) project,
+which provided the original concept for this tool. 
+Asimeow aims to be a spiritual successor to the original asimov project, building upon its core concept with several
+improvements. These enhancements include more adaptable rule configurations, multi-threaded tree traversal, 
+and more efficient processing capabilities.
 
 
 ## Installation
@@ -31,7 +33,7 @@ brew tap mdnmdn/asimeow
 brew install asimeow
 ```
 
-To run asimeow as a scheduled service:
+To run asimeow as a scheduled service (run every 6 hours):
 
 ```bash
 brew services start asimeow
