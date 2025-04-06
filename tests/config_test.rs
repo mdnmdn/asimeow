@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use serde_yaml;
+
     use std::fs;
     use std::path::Path;
 
@@ -53,9 +53,9 @@ mod tests {
             );
 
             // Check that exclusions is an array
-            let exclusions = rule["exclusions"]
+            let _exclusions = rule["exclusions"]
                 .as_sequence()
-                .expect(&format!("Rule {} 'exclusions' is not an array", i));
+                .unwrap_or_else(|| panic!("Rule {} 'exclusions' is not an array", i));
         }
     }
 }

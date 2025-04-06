@@ -39,10 +39,9 @@ impl State {
     }
 }
 
-/// Excludes a path from Time Machine backups on macOS.
-/// Returns true if the path was successfully excluded or false if it was already excluded.
-pub fn exclude_from_timemachine(path: &Path) -> bool {
-    // Check if the path is already excluded
+/// Checks if a path is excluded from Time Machine backups on macOS.
+/// Returns true if the path is excluded, false otherwise.
+pub fn is_excluded_from_timemachine(path: &Path) -> bool {
     let check_output = Command::new("tmutil")
         .args(["isexcluded", path.to_str().unwrap_or_default()])
         .output();
@@ -50,23 +49,47 @@ pub fn exclude_from_timemachine(path: &Path) -> bool {
     match check_output {
         Ok(output) => {
             let output_str = String::from_utf8_lossy(&output.stdout);
-
-            // If the path is already excluded, tmutil will report "[Excluded]"
-            if output_str.contains("[Excluded]") {
-                return false; // Already excluded
-            }
-
-            // Exclude the path
-            let exclude_result = Command::new("tmutil")
-                .args(["addexclusion", path.to_str().unwrap_or_default()])
-                .status();
-
-            match exclude_result {
-                Ok(status) => status.success(),
-                Err(_) => false,
-            }
+            output_str.contains("[Excluded]")
         }
         Err(_) => false, // Failed to run tmutil
+    }
+}
+
+/// Excludes a path from Time Machine backups on macOS.
+/// Returns true if the path was successfully excluded or false if it was already excluded.
+pub fn exclude_from_timemachine(path: &Path) -> bool {
+    // Check if the path is already excluded
+    if is_excluded_from_timemachine(path) {
+        return false; // Already excluded
+    }
+
+    // Exclude the path
+    let exclude_result = Command::new("tmutil")
+        .args(["addexclusion", path.to_str().unwrap_or_default()])
+        .status();
+
+    match exclude_result {
+        Ok(status) => status.success(),
+        Err(_) => false,
+    }
+}
+
+/// Removes a path from Time Machine exclusions on macOS.
+/// Returns true if the path was successfully included or false if it was already included.
+pub fn include_in_timemachine(path: &Path) -> bool {
+    // Check if the path is already included (not excluded)
+    if !is_excluded_from_timemachine(path) {
+        return false; // Already included
+    }
+
+    // Include the path (remove exclusion)
+    let include_result = Command::new("tmutil")
+        .args(["removeexclusion", path.to_str().unwrap_or_default()])
+        .status();
+
+    match include_result {
+        Ok(status) => status.success(),
+        Err(_) => false,
     }
 }
 
@@ -345,6 +368,157 @@ pub fn run_workers(
             break;
         }
         thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    Ok(())
+}
+
+/// Lists the exclusion status of files and directories in a given path
+pub fn list_exclusions(path_str: Option<&str>) -> Result<()> {
+    // If no path is provided, use the current directory
+    let path = if let Some(p) = path_str {
+        crate::config::expand_tilde(p)?
+    } else {
+        std::env::current_dir()?
+    };
+
+    if !path.exists() {
+        return Err(anyhow::anyhow!("Path does not exist: {}", path.display()));
+    }
+
+    // Check if we're listing a directory with all contents or just a single file/directory
+    let is_directory_listing = path.is_dir() && path_str.is_none_or(|p| p.ends_with('/'));
+
+    if is_directory_listing {
+        // List all entries in the directory
+        println!("Listing contents of: {}", path.display());
+        println!("------------------------------------");
+
+        let entries = match fs::read_dir(&path) {
+            Ok(entries) => entries,
+            Err(e) => return Err(anyhow::anyhow!("Failed to read directory: {}", e)),
+        };
+
+        let mut has_entries = false;
+        for entry_result in entries {
+            has_entries = true;
+            let entry = match entry_result {
+                Ok(entry) => entry,
+                Err(e) => {
+                    eprintln!("Error accessing entry: {}", e);
+                    continue;
+                }
+            };
+
+            let entry_path = entry.path();
+            let is_excluded = is_excluded_from_timemachine(&entry_path);
+
+            // Format the output with appropriate indicators
+            let indicator = if is_excluded { "🟡" } else { "  " };
+            let type_indicator = if entry_path.is_dir() { "/" } else { "" };
+
+            println!(
+                "{} {}{}",
+                indicator,
+                entry_path.file_name().unwrap_or_default().to_string_lossy(),
+                type_indicator
+            );
+        }
+
+        if !has_entries {
+            println!("  (empty directory)");
+        }
+
+        // Add a legend
+        println!("\nLegend:");
+        println!("🟡 - Excluded from Time Machine");
+        println!("  - Included in Time Machine");
+        println!("/ - Directory");
+    } else {
+        // Just check the status of the specific path but format it like the directory listing
+        let item_type = if path.is_dir() { "directory" } else { "file" };
+        println!("Status of {}: {}", item_type, path.display());
+        println!("------------------------------------");
+
+        let is_excluded = is_excluded_from_timemachine(&path);
+        let indicator = if is_excluded { "🟡" } else { "  " };
+        let type_indicator = if path.is_dir() { "/" } else { "" };
+
+        // Use the filename if available, otherwise use the full path
+        let display_name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.display().to_string());
+
+        println!("{} {}{}", indicator, display_name, type_indicator);
+
+        // Add a legend
+        println!("\nLegend:");
+        println!("🟡 - Excluded from Time Machine");
+        println!("  - Included in Time Machine");
+        if path.is_dir() {
+            println!("/ - Directory");
+        }
+    }
+
+    Ok(())
+}
+
+/// Explicitly excludes a single file or folder from Time Machine backups
+pub fn exclude_path(path_str: &str, verbose: bool) -> Result<()> {
+    // Expand the path if it contains a tilde
+    let path = crate::config::expand_tilde(path_str)?;
+
+    if !path.exists() {
+        return Err(anyhow::anyhow!("Path does not exist: {}", path.display()));
+    }
+
+    let item_type = if path.is_dir() { "directory" } else { "file" };
+
+    if verbose {
+        println!(
+            "Excluding {} from Time Machine: {}",
+            item_type,
+            path.display()
+        );
+    }
+
+    let excluded = exclude_from_timemachine(&path);
+
+    if excluded {
+        println!("✅ Successfully excluded: {}", path.display());
+    } else {
+        println!("🟡 Already excluded: {}", path.display());
+    }
+
+    Ok(())
+}
+
+/// Explicitly includes a single file or folder in Time Machine backups (removes exclusion)
+pub fn include_path(path_str: &str, verbose: bool) -> Result<()> {
+    // Expand the path if it contains a tilde
+    let path = crate::config::expand_tilde(path_str)?;
+
+    if !path.exists() {
+        return Err(anyhow::anyhow!("Path does not exist: {}", path.display()));
+    }
+
+    let item_type = if path.is_dir() { "directory" } else { "file" };
+
+    if verbose {
+        println!(
+            "Including {} in Time Machine: {}",
+            item_type,
+            path.display()
+        );
+    }
+
+    let included = include_in_timemachine(&path);
+
+    if included {
+        println!("✅ Successfully included: {}", path.display());
+    } else {
+        println!("  Already included: {}", path.display());
     }
 
     Ok(())

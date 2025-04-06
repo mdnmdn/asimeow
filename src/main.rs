@@ -40,6 +40,24 @@ enum Commands {
     },
     /// Print the current version
     Version,
+    /// List exclusions in the specified path
+    /// - If path is a folder and ends with /, shows all files highlighting the exclusions
+    /// - If path is a file or folder without /, shows the specific file or folder status
+    /// - If no path is specified, shows the content of the current folder
+    List {
+        /// Path to list exclusions for
+        path: Option<String>,
+    },
+    /// Explicitly exclude a single file or folder from Time Machine backups
+    Exclude {
+        /// Path to exclude from Time Machine backups
+        path: String,
+    },
+    /// Explicitly include a single file or folder in Time Machine backups (remove exclusion)
+    Include {
+        /// Path to include in Time Machine backups
+        path: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -54,6 +72,15 @@ fn main() -> Result<()> {
             Commands::Version => {
                 println!("Asimeow version {}", env!("CARGO_PKG_VERSION"));
                 return Ok(());
+            }
+            Commands::List { path } => {
+                return explorer::list_exclusions(path.as_deref());
+            }
+            Commands::Exclude { path } => {
+                return explorer::exclude_path(path, args.verbose);
+            }
+            Commands::Include { path } => {
+                return explorer::include_path(path, args.verbose);
             }
         }
     }
