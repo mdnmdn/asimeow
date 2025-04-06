@@ -40,6 +40,14 @@ enum Commands {
     },
     /// Print the current version
     Version,
+    /// List exclusions in the specified path
+    /// - If path is a folder and ends with /, shows all files highlighting the exclusions
+    /// - If path is a file or folder without /, shows the specific file or folder status
+    /// - If no path is specified, shows the content of the current folder
+    List {
+        /// Path to list exclusions for
+        path: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -54,6 +62,9 @@ fn main() -> Result<()> {
             Commands::Version => {
                 println!("Asimeow version {}", env!("CARGO_PKG_VERSION"));
                 return Ok(());
+            }
+            Commands::List { path } => {
+                return explorer::list_exclusions(path.as_deref());
             }
         }
     }
