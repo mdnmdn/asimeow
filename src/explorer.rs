@@ -74,6 +74,25 @@ pub fn exclude_from_timemachine(path: &Path) -> bool {
     }
 }
 
+/// Removes a path from Time Machine exclusions on macOS.
+/// Returns true if the path was successfully included or false if it was already included.
+pub fn include_in_timemachine(path: &Path) -> bool {
+    // Check if the path is already included (not excluded)
+    if !is_excluded_from_timemachine(path) {
+        return false; // Already included
+    }
+
+    // Include the path (remove exclusion)
+    let include_result = Command::new("tmutil")
+        .args(["removeexclusion", path.to_str().unwrap_or_default()])
+        .status();
+
+    match include_result {
+        Ok(status) => status.success(),
+        Err(_) => false,
+    }
+}
+
 fn process_exclusion(path: &Path, rule: &Rule, state: &Arc<State>, verbose: bool) {
     // Print in the requested format: /path/to/excluded/dir - rule-name
     for exclusion in &rule.exclusions {
@@ -434,6 +453,58 @@ pub fn list_exclusions(path_str: Option<&str>) -> Result<()> {
         if path.is_dir() {
             println!("/ - Directory");
         }
+    }
+
+    Ok(())
+}
+
+/// Explicitly excludes a single file or folder from Time Machine backups
+pub fn exclude_path(path_str: &str, verbose: bool) -> Result<()> {
+    // Expand the path if it contains a tilde
+    let path = crate::config::expand_tilde(path_str)?;
+
+    if !path.exists() {
+        return Err(anyhow::anyhow!("Path does not exist: {}", path.display()));
+    }
+
+    let item_type = if path.is_dir() { "directory" } else { "file" };
+
+    if verbose {
+        println!("Excluding {} from Time Machine: {}", item_type, path.display());
+    }
+
+    let excluded = exclude_from_timemachine(&path);
+
+    if excluded {
+        println!("✅ Successfully excluded: {}", path.display());
+    } else {
+        println!("🟡 Already excluded: {}", path.display());
+    }
+
+    Ok(())
+}
+
+/// Explicitly includes a single file or folder in Time Machine backups (removes exclusion)
+pub fn include_path(path_str: &str, verbose: bool) -> Result<()> {
+    // Expand the path if it contains a tilde
+    let path = crate::config::expand_tilde(path_str)?;
+
+    if !path.exists() {
+        return Err(anyhow::anyhow!("Path does not exist: {}", path.display()));
+    }
+
+    let item_type = if path.is_dir() { "directory" } else { "file" };
+
+    if verbose {
+        println!("Including {} in Time Machine: {}", item_type, path.display());
+    }
+
+    let included = include_in_timemachine(&path);
+
+    if included {
+        println!("✅ Successfully included: {}", path.display());
+    } else {
+        println!("  Already included: {}", path.display());
     }
 
     Ok(())

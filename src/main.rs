@@ -48,6 +48,16 @@ enum Commands {
         /// Path to list exclusions for
         path: Option<String>,
     },
+    /// Explicitly exclude a single file or folder from Time Machine backups
+    Exclude {
+        /// Path to exclude from Time Machine backups
+        path: String,
+    },
+    /// Explicitly include a single file or folder in Time Machine backups (remove exclusion)
+    Include {
+        /// Path to include in Time Machine backups
+        path: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -65,6 +75,12 @@ fn main() -> Result<()> {
             }
             Commands::List { path } => {
                 return explorer::list_exclusions(path.as_deref());
+            }
+            Commands::Exclude { path } => {
+                return explorer::exclude_path(path, args.verbose);
+            }
+            Commands::Include { path } => {
+                return explorer::include_path(path, args.verbose);
             }
         }
     }

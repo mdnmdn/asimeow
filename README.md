@@ -13,6 +13,8 @@ artifacts from Time Machine backups.
 - Recursively explores directories from specified root paths
 - Identifies files matching patterns defined in rules (like package.json, cargo.toml, etc.)
 - Automatically excludes development artifacts from Time Machine backups
+- Provides commands to manually exclude or include specific files and directories
+- Allows listing and checking the exclusion status of files and directories
 - Multi-threaded for fast processing of large directory structures
 
 ## Acknowledgments
@@ -103,6 +105,12 @@ The executable will be available at `target/release/asimeow`.
 
 # Check exclusion status of a specific file or directory (without trailing slash)
 ./asimeow list /path/to/file
+
+# Explicitly exclude a specific file or directory from Time Machine backups
+./asimeow exclude /path/to/file_or_directory
+
+# Explicitly include a specific file or directory in Time Machine backups (remove exclusion)
+./asimeow include /path/to/file_or_directory
 ```
 
 Note: This tool requires macOS and uses the `tmutil` command to manage Time Machine exclusions. You may need to run it with sudo for some operations.
@@ -199,6 +207,8 @@ When you run `asimeow init`, a default configuration file will be created with c
 
 ## How It Works
 
+### Automatic Exclusion Mode
+
 1. The tool reads the configuration file to get root paths, ignore patterns, and rules
 2. For each root path, it recursively explores all subdirectories using multiple worker threads
 3. Directories matching the ignore patterns (e.g., `.git`) are skipped entirely during exploration
@@ -209,6 +219,22 @@ When you run `asimeow init`, a default configuration file will be created with c
    - Displays the status with visual indicators (✅ for newly excluded, 🟡 for already excluded)
 6. Directories listed in the exclusions are not explored further
 7. With the verbose flag (-v), additional information is displayed
+
+### Manual Exclusion Commands
+
+The tool also provides direct commands to manage Time Machine exclusions:
+
+- `exclude <path>`: Explicitly excludes a specific file or directory from Time Machine backups
+  - Checks if the path exists
+  - Verifies if it's already excluded
+  - Adds it to Time Machine exclusions if needed
+  - Displays the result (✅ for newly excluded, 🟡 for already excluded)
+
+- `include <path>`: Explicitly includes a specific file or directory in Time Machine backups
+  - Checks if the path exists
+  - Verifies if it's already included
+  - Removes it from Time Machine exclusions if needed
+  - Displays the result (✅ for newly included, or a message if already included)
 
 ## Example Output
 
@@ -289,6 +315,44 @@ Legend:
 🟡 - Excluded from Time Machine
   - Included in Time Machine
 / - Directory
+```
+
+### Exclude Command Output
+
+```
+✅ Successfully excluded: /Users/user/projects/build
+```
+
+With verbose flag (-v):
+
+```
+Excluding directory from Time Machine: /Users/user/projects/build
+✅ Successfully excluded: /Users/user/projects/build
+```
+
+If already excluded:
+
+```
+🟡 Already excluded: /Users/user/projects/node_modules
+```
+
+### Include Command Output
+
+```
+✅ Successfully included: /Users/user/projects/target
+```
+
+With verbose flag (-v):
+
+```
+Including directory in Time Machine: /Users/user/projects/target
+✅ Successfully included: /Users/user/projects/target
+```
+
+If already included:
+
+```
+  Already included: /Users/user/projects/src
 ```
 
 ## Why Use Asimeow?
