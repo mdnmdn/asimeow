@@ -94,6 +94,15 @@ The executable will be available at `target/release/asimeow`.
 
 # Create a default configuration file at a specific path
 ./asimeow init --path /path/to/config.yaml
+
+# List exclusions in the current directory
+./asimeow list
+
+# List exclusions in a specific directory (with trailing slash)
+./asimeow list /path/to/directory/
+
+# Check exclusion status of a specific file or directory (without trailing slash)
+./asimeow list /path/to/file
 ```
 
 Note: This tool requires macOS and uses the `tmutil` command to manage Time Machine exclusions. You may need to run it with sudo for some operations.
@@ -249,6 +258,39 @@ Total exclusions found: 3
 Newly excluded from Time Machine: 2
 ```
 
+### List Command Output
+
+#### Listing a Directory
+
+```
+Listing contents of: /Users/user/projects/
+------------------------------------
+🟡 node_modules/
+   package.json
+   README.md
+🟡 target/
+   Cargo.toml
+   src/
+
+Legend:
+🟡 - Excluded from Time Machine
+  - Included in Time Machine
+/ - Directory
+```
+
+#### Checking a Specific File or Directory
+
+```
+Status of directory: /Users/user/projects/target
+------------------------------------
+🟡 target/
+
+Legend:
+🟡 - Excluded from Time Machine
+  - Included in Time Machine
+/ - Directory
+```
+
 ## Why Use Asimeow?
 
 Developers often have large directories of build artifacts, dependencies, and generated files that:
@@ -260,10 +302,10 @@ Asimeow automatically identifies and excludes these directories based on project
 
 ## Roadmap
 
-- [ ] Analyze current time machine exclusions of specific paths
+- [x] Analyze current time machine exclusions of specific paths
 - [ ] Analyze exclusion folder "decay" in order to identify old and unused exclusions and clean from disk
 - [ ] Provide detailed statistics about excluded directories and their sizes
-- [ ] Improve tests 
+- [ ] Improve tests
 - [ ] Simplify access to configuration via cli options
 
 ## Contributing
