@@ -387,7 +387,7 @@ pub fn list_exclusions(path_str: Option<&str>) -> Result<()> {
     }
 
     // Check if we're listing a directory with all contents or just a single file/directory
-    let is_directory_listing = path.is_dir() && path_str.map_or(true, |p| p.ends_with('/'));
+    let is_directory_listing = path.is_dir() && path_str.is_none_or(|p| p.ends_with('/'));
 
     if is_directory_listing {
         // List all entries in the directory
@@ -417,7 +417,12 @@ pub fn list_exclusions(path_str: Option<&str>) -> Result<()> {
             let indicator = if is_excluded { "🟡" } else { "  " };
             let type_indicator = if entry_path.is_dir() { "/" } else { "" };
 
-            println!("{} {}{}", indicator, entry_path.file_name().unwrap_or_default().to_string_lossy(), type_indicator);
+            println!(
+                "{} {}{}",
+                indicator,
+                entry_path.file_name().unwrap_or_default().to_string_lossy(),
+                type_indicator
+            );
         }
 
         if !has_entries {
@@ -440,7 +445,8 @@ pub fn list_exclusions(path_str: Option<&str>) -> Result<()> {
         let type_indicator = if path.is_dir() { "/" } else { "" };
 
         // Use the filename if available, otherwise use the full path
-        let display_name = path.file_name()
+        let display_name = path
+            .file_name()
             .map(|name| name.to_string_lossy().to_string())
             .unwrap_or_else(|| path.display().to_string());
 
@@ -470,7 +476,11 @@ pub fn exclude_path(path_str: &str, verbose: bool) -> Result<()> {
     let item_type = if path.is_dir() { "directory" } else { "file" };
 
     if verbose {
-        println!("Excluding {} from Time Machine: {}", item_type, path.display());
+        println!(
+            "Excluding {} from Time Machine: {}",
+            item_type,
+            path.display()
+        );
     }
 
     let excluded = exclude_from_timemachine(&path);
@@ -496,7 +506,11 @@ pub fn include_path(path_str: &str, verbose: bool) -> Result<()> {
     let item_type = if path.is_dir() { "directory" } else { "file" };
 
     if verbose {
-        println!("Including {} in Time Machine: {}", item_type, path.display());
+        println!(
+            "Including {} in Time Machine: {}",
+            item_type,
+            path.display()
+        );
     }
 
     let included = include_in_timemachine(&path);
