@@ -1,5 +1,5 @@
 roots:
-  - path: ..
+  - path: ../../../dreamai/workspace/open-canvas
 
 ignore:
   - .git
