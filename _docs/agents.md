@@ -178,7 +178,7 @@ If needed, install `just` via Homebrew: `brew install just`.
 
 # Instructions
 
-## Directive
+## Directives
 
 - simplicity is the ultimate perfetcion
 - be pragmatic and brutally honest
@@ -186,4 +186,5 @@ If needed, install `just` via Homebrew: `brew install just`.
 - at end of the task update the CHANGELOG
 - when a task is complete `cargo fmt --all -- --check` and `cargo clippy -- -D warnings` and make sure are ok
 - write all the task realated temporary informations in the _docs/wip, for example markdown plans.
-- if the task are small there is no 
+- if the task are small there is no need for plan
+- if plan is asked by the user don't start to implement unless requested

@@ -70,6 +70,47 @@ fn test_process_path_with_node_project() -> Result<()> {
 }
 
 #[test]
+fn test_does_not_enqueue_children_of_excluded_dir() -> Result<()> {
+    // Arrange a project with node rule and a nested node_modules tree
+    let temp_dir = create_test_project(
+        "test-skip-excluded-children",
+        vec![config::Rule {
+            name: "node".to_string(),
+            file_match: "package.json".to_string(),
+            exclusions: vec!["node_modules".to_string()],
+        }],
+    )?;
+
+    let project_dir = temp_dir.path().join("test-skip-excluded-children");
+
+    // Root indicator + excluded dir
+    File::create(project_dir.join("package.json"))?;
+    let node_modules = project_dir.join("node_modules");
+    fs::create_dir_all(&node_modules)?;
+
+    // Create nested structure inside node_modules that would normally be traversed
+    let nested = node_modules.join("a").join("b").join("c");
+    fs::create_dir_all(&nested)?;
+    File::create(nested.join("package.json"))?; // should be ignored because under excluded dir
+
+    // Act
+    let (cfg, _) = config::load_config(
+        Some(temp_dir.path().join("config.yaml").to_str().unwrap()),
+        false,
+    )?;
+    let stats = explorer::run_explorer_with_stats(cfg, 2, false)?;
+
+    // Assert: we should process only the project root (and maybe a few siblings),
+    // but never descend into node_modules. Since the traversal counts processed directories,
+    // ensure it's small and not proportional to nested depth we created.
+    // At minimum it must be >= 1 (the root). Cap at < 5 to indicate we didn't walk deep.
+    assert!(stats.processed_paths >= 1);
+    assert!(stats.processed_paths < 5);
+
+    Ok(())
+}
+
+#[test]
 fn test_ignore_patterns() -> Result<()> {
     // Create a temporary directory for our test
     let temp_dir = create_test_project(

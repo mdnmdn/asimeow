@@ -1,6 +1,6 @@
 [package]
 name = "asimeow"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "A tool for managing macOS Time Machine exclusions for developer's workspaces"
 authors = ["mdnmdn"]
