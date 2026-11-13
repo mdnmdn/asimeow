@@ -22,6 +22,10 @@ struct Args {
     #[arg(short, long, default_value = "4")]
     threads: usize,
 
+    /// Show what would be excluded without changing anything
+    #[arg(long)]
+    dry_run: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -102,7 +106,7 @@ fn main() -> Result<()> {
     let (config, _) = config::load_config(config_path, args.verbose)?;
 
     // Run the explorer with the loaded configuration
-    explorer::run_explorer(config, args.threads, args.verbose)?;
+    explorer::run_explorer(config, args.threads, args.verbose, args.dry_run)?;
 
     Ok(())
 }

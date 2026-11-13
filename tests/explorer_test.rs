@@ -61,7 +61,7 @@ fn test_process_path_with_node_project() -> Result<()> {
     )?;
 
     // Run the explorer
-    let result = explorer::run_explorer(config, 1, false);
+    let result = explorer::run_explorer(config, 1, false, true);
 
     // Verify it runs without errors
     assert!(result.is_ok());
@@ -98,7 +98,7 @@ fn test_does_not_enqueue_children_of_excluded_dir() -> Result<()> {
         Some(temp_dir.path().join("config.yaml").to_str().unwrap()),
         false,
     )?;
-    let stats = explorer::run_explorer_with_stats(cfg, 2, false)?;
+    let stats = explorer::run_explorer_with_stats(cfg, 2, false, true)?;
 
     // Assert: we should process only the project root (and maybe a few siblings),
     // but never descend into node_modules. Since the traversal counts processed directories,
@@ -141,7 +141,7 @@ fn test_ignore_patterns() -> Result<()> {
     )?;
 
     // Run the explorer
-    let result = explorer::run_explorer(config, 1, false);
+    let result = explorer::run_explorer(config, 1, false, true);
 
     // Should run without errors
     assert!(result.is_ok());
@@ -187,7 +187,7 @@ fn test_multiple_rules() -> Result<()> {
     )?;
 
     // Run the explorer
-    let result = explorer::run_explorer(config, 2, false); // Use 2 threads
+    let result = explorer::run_explorer(config, 2, false, true); // Use 2 threads
     assert!(result.is_ok());
 
     Ok(())
@@ -227,8 +227,57 @@ fn test_nested_projects() -> Result<()> {
     )?;
 
     // Run the explorer
-    let result = explorer::run_explorer(config, 1, false);
+    let result = explorer::run_explorer(config, 1, false, true);
     assert!(result.is_ok());
 
+    Ok(())
+}
+
+fn scan_only(root: &std::path::Path) -> config::Config {
+    config::Config {
+        roots: vec![config::Root {
+            path: root.to_str().unwrap().to_string(),
+        }],
+        ignore: vec![],
+        rules: vec![],
+    }
+}
+
+#[test]
+fn test_walks_every_directory_with_many_threads() -> Result<()> {
+    // A wide tree plus a long chain. The old queue could let a worker see "no work left"
+    // while another worker was about to queue children, ending the walk early.
+    let temp_dir = tempdir()?;
+    for a in 0..8 {
+        for b in 0..8 {
+            for c in 0..4 {
+                fs::create_dir_all(temp_dir.path().join(format!("{a}/{b}/{c}")))?;
+            }
+        }
+    }
+    let chain: std::path::PathBuf = std::iter::once("chain")
+        .chain(std::iter::repeat_n("d", 100))
+        .collect();
+    fs::create_dir_all(temp_dir.path().join(chain))?;
+    let expected = 1 + (8 + 64 + 256) + (1 + 100);
+
+    for _ in 0..20 {
+        let stats = explorer::run_explorer_with_stats(scan_only(temp_dir.path()), 8, false, true)?;
+        assert_eq!(stats.processed_paths, expected);
+    }
+    Ok(())
+}
+
+#[test]
+fn test_symlinked_directories_are_not_followed() -> Result<()> {
+    // real/loop points back at the root: following it would walk forever
+    let temp_dir = tempdir()?;
+    let real = temp_dir.path().join("real");
+    fs::create_dir(&real)?;
+    std::os::unix::fs::symlink(temp_dir.path(), real.join("loop"))?;
+
+    let stats = explorer::run_explorer_with_stats(scan_only(temp_dir.path()), 4, false, true)?;
+
+    assert_eq!(stats.processed_paths, 2, "only the root and real/");
     Ok(())
 }

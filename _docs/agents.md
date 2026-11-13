@@ -5,7 +5,7 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
 ### Goal
 
 - **Primary goal**: Identify development artifacts (e.g., `node_modules`, `target`, `dist`) inside project folders and exclude them from macOS Time Machine backups to save space and speed up backups.
-- **Approach**: Recursively traverse configured root folders, match project indicators (like `package.json`, `Cargo.toml`), and exclude rule-defined directories using `tmutil`.
+- **Approach**: Recursively traverse configured root folders, match project indicators (like `package.json`, `Cargo.toml`), and exclude rule-defined directories by setting Time Machine's sticky exclusion mark (the one `tmutil addexclusion` writes).
 
 ## Behaviours (what the tool does)
 
@@ -13,8 +13,8 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
 - **Ignore directories**: Skips directories matching `ignore` patterns (glob on the directory name, e.g., `.git`).
 - **Manual control**:
   - `list [path]`: Show Time Machine exclusion status for a directory or a single path.
-  - `exclude <path>`: Force-exclude a directory or file via `tmutil addexclusion`.
-  - `include <path>`: Remove exclusion via `tmutil removeexclusion`.
+  - `exclude <path>`: Force-exclude a directory or file by setting the sticky exclusion mark.
+  - `include <path>`: Remove the sticky exclusion mark (and report if a parent folder or a system rule still excludes it).
 - **Initialization**: `init` generates a default `config.yaml` either locally or at `~/.config/asimeow/config.yaml` with common presets for many ecosystems.
 - **Reporting**: Prints concise status lines (✅ newly excluded, 🟡 already excluded) and summary totals (processed paths, exclusions found, newly excluded) when relevant or in verbose mode.
 
@@ -49,32 +49,33 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
 
 - File: `src/explorer.rs`
 - **State model**:
-  - `State` with thread-safe counters and a shared queue: `folder_queue`, `exclusion_found`, `processed_paths`, `active_tasks`, `processing_complete`, `newly_excluded` (all protected by `RwLock`).
-  - Simple in-memory work queue (`Vec<PathBuf>`) managed under locks; workers pop from the front.
+  - `State`: the `verbose` and `dry_run` settings plus atomic counters (`processed_paths`, `exclusions_found`, `newly_excluded`).
+  - A private `Queue`: a `VecDeque<PathBuf>` and a `pending` count (directories queued or being processed) under one `Mutex`, with a `Condvar` for idle workers.
 - **Workers**:
-  - `run_workers(state, rules, thread_count, verbose, ignore_patterns)`: spawns `thread_count` threads. Each thread repeatedly pulls a path from the queue and calls `process_path()` until the queue empties and no tasks are active.
-  - Completion is detected when the queue is empty and `active_tasks == 0`, then `processing_complete` is set.
+  - `run_workers(roots, state, matcher, thread_count)`: spawns scoped threads. Each one pops a directory, calls `process_path()`, and hands the returned subdirectories back with `Queue::finish`, which adds the children and retires the parent in one locked step. The walk ends when `pending` reaches 0, so it can't end while a worker still holds work.
 - **Traversal**:
-  - `run_explorer(config, threads, verbose)`: enqueues each `root` (with `~` expansion), then starts workers. After completion, prints totals.
-  - `process_path(path, state, rules, verbose, ignore_patterns)`:
-    - Validates path exists and is a directory.
-    - Applies ignore checks against the current directory name using glob patterns from `ignore`.
-    - Reads entries once, collecting subdirectories while evaluating rule matches.
-    - For each file/entry in the current directory, matches `rule.file_match` using glob semantics (case-insensitive via lowercase comparisons).
-    - On a rule match:
-      - For each `exclusions` item, builds `exclusion_path = current_dir / exclusion` and attempts exclusion.
-      - Records `directory_to_ignore` to avoid descending into newly excluded directories.
-      - Special-case: if `exclusions` contains "." or "..", the function returns early (treat as do-not-descend behaviour for current or parent).
-    - Finally, enqueues subdirectories that are not ignored and not among the excluded dir names.
+  - `run_explorer(config, threads, verbose, dry_run)`: expands the roots (`~`), compiles the rules once into a `Matcher`, runs the workers, and prints totals.
+  - `process_path(path, state, matcher)`:
+    - Skips directories whose name matches an `ignore` pattern.
+    - Reads entries once. It matches each name against the rules and collects subdirectories with `DirEntry::file_type()`, which does not follow symlinks.
+    - On a rule match, `process_exclusion` checks each `exclusions` item (`current_dir / exclusion`) that exists: already marked → 🟡; otherwise it writes the mark (or only reports it with `--dry-run`) → ✅; a failed write → ❌ on stderr.
+    - Never descends into excluded folders. If `exclusions` contains "." or "..", it stops below this directory.
+    - Returns the remaining subdirectories to walk next.
+
+### Rules agent
+
+- File: `src/rules.rs`
+- `Matcher::new(rules, ignore)` compiles everything once. Literal `file_match` names (most rules) go into a hash map; real globs (`*.csproj`) are matched in order. Matching is case-insensitive and the first rule in config order wins.
+- `is_ignored(dir_name)`: glob match of `ignore` patterns on a directory name (case-sensitive).
 
 ### Time Machine integration agent
 
-- File: `src/explorer.rs`
+- File: `src/tm.rs`
 - **Functions**:
-  - `is_excluded_from_timemachine(path)`: runs `tmutil isexcluded <path>` and parses `[Excluded]`.
-  - `exclude_from_timemachine(path)`: runs `tmutil addexclusion <path>`; returns false if already excluded.
-  - `include_in_timemachine(path)`: runs `tmutil removeexclusion <path>`; returns false if already included.
-- **User-facing commands**:
+  - `has_exclusion_mark(path)`: reads the sticky exclusion xattr `com.apple.metadata:com_apple_backup_excludeItem` (no subprocess). Ignores system-wide and inherited exclusions.
+  - `set_exclusion_mark(path, exclude)`: sets or clears the mark with CoreServices `CSBackupSetItemExcluded`, the call `tmutil addexclusion` and cargo use underneath (byte-identical mark, under 1 ms instead of seconds), then verifies it.
+  - `is_excluded(path)`: runs `tmutil isexcluded <path>` (includes system and inherited exclusions). Used by `list`, `exclude` and `include`.
+- **User-facing commands** (in `src/explorer.rs`):
   - `exclude_path(path, verbose)` / `include_path(path, verbose)` wrap the above with path expansion, type detection (file/dir), and user messages.
   - `list_exclusions(path?)`: directory listing mode (if a directory ending with `/` or no path provided) or single item status mode; prints legend and markers.
 
@@ -84,7 +85,7 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
 2. If no subcommand: configuration is located and parsed.
 3. Roots are enqueued; worker threads process the queue concurrently.
 4. Each directory read checks for rule indicators and applies exclusions.
-5. Exclusions are attempted with `tmutil`, producing ✅ or 🟡 output lines.
+5. Exclusion marks are read and written in-process, producing ✅ or 🟡 output lines.
 6. Counters are updated and a concise summary is printed at the end.
 
 ## Configuration quick reference
@@ -113,7 +114,7 @@ rules:
 
 - **Platform**: macOS only. Requires `tmutil` available in PATH.
 - **Permissions**: Some exclusions may require elevated privileges; run the tool with sufficient rights if needed.
-- **Performance**: Multi-threaded traversal with a shared queue; simple locking can become a bottleneck on very large trees, but is adequate for typical developer machines.
+- **Performance**: Multi-threaded traversal with one shared queue. No subprocess is spawned during a scan; `tmutil` is used only by `list`, `exclude` and `include`.
 - **Pattern matching**: Rule file-matching and ignore matching use glob semantics on lowercased names of directory entries.
 
 ### CLI quick reference
@@ -122,6 +123,7 @@ rules:
 - `./asimeow -c path/to/config.yaml` — Use custom config
 - `./asimeow -v` — Verbose output
 - `./asimeow -t 8` — Set worker threads
+- `./asimeow --dry-run` — Report what would be excluded without changing anything
 - `./asimeow init` — Create default config in `~/.config/asimeow/`
 - `./asimeow init --local` — Create `config.yaml` in current directory
 - `./asimeow list [path]` — List Time Machine exclusions
@@ -135,6 +137,7 @@ rules:
 - `clap` — Command-line argument parsing
 - `anyhow` — Error handling
 - `dirs` — Home directory resolution for `~/`
+- No other runtime dependencies: the Time Machine mark is read with `getxattr` and written with CoreServices via small FFI declarations in `src/tm.rs`
 
 ### Developer notes
 
@@ -174,7 +177,8 @@ If needed, install `just` via Homebrew: `brew install just`.
 - **Configuration agent**: Finds, reads, and writes `config.yaml` and expands paths.
 - **Explorer agent**: Owns traversal, queueing, matching rules, and recording results.
 - **Worker agents**: Concurrent threads that process directories from the shared queue.
-- **Time Machine agent**: Thin shell-out layer that interacts with `tmutil` for inclusion/exclusion queries and commands.
+- **Rules agent**: Compiles rules and ignore patterns once and matches entry names.
+- **Time Machine agent**: Reads and writes the exclusion mark in-process; shells out to `tmutil isexcluded` for status queries.
 
 # Instructions
 

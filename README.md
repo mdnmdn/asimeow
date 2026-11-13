@@ -88,6 +88,9 @@ The executable will be available at `target/release/asimeow`.
 # Specify number of worker threads (default: 4)
 ./asimeow -t 8
 
+# Show what would be excluded without changing anything
+./asimeow --dry-run
+
 # Create a default configuration file in ~/.config/asimeow/
 ./asimeow init
 
@@ -214,10 +217,10 @@ When you run `asimeow init`, a default configuration file will be created with c
 3. Directories matching the ignore patterns (e.g., `.git`) are skipped entirely during exploration
 4. When a file matching a rule's pattern is found (e.g., package.json, cargo.toml), it checks for the existence of excluded directories
 5. For each excluded directory that exists (e.g., node_modules, target), it:
-   - Checks if the directory is already excluded from Time Machine
-   - If not, adds it to Time Machine exclusions using `tmutil addexclusion`
+   - Checks if the directory already carries Time Machine's exclusion mark
+   - If not, adds the mark (the same one `tmutil addexclusion` writes, but set in-process, which is much faster)
    - Displays the status with visual indicators (✅ for newly excluded, 🟡 for already excluded)
-6. Directories listed in the exclusions are not explored further
+6. Directories listed in the exclusions are not explored further, and symlinked directories are never followed
 7. With the verbose flag (-v), additional information is displayed
 
 ### Manual Exclusion Commands
