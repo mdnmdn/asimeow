@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `--visual` (alias `--tui`): a full-screen view of a scan. It shows live progress (with
+  an estimate from the last run), space saved (total, this run, change since the last
+  run), the excluded folders grouped by area and sorted by size (folding, `n` for only
+  changes) and recent activity. It stays open for browsing after the scan; `q` quits
+  (also during a scan, which then stops and doesn't save the cache) and prints the
+  summary to the normal screen. Without a terminal it falls back to plain lines.
 - `--dry-run`: report what would be excluded without changing anything
 - In a terminal, a live status line (folders scanned, current folder) and a short summary
 - Exit code 1 when a folder could not be excluded

@@ -42,6 +42,7 @@ fn summary() -> Summary {
         new_bytes: 668_000_000,
         measured: 3,
         previous_bytes: Some(8_710_000_000),
+        cancelled: false,
         elapsed: Duration::from_millis(220),
     }
 }

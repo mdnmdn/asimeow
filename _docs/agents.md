@@ -28,6 +28,7 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
   - `-v, --verbose`
   - `-t, --threads <N>` worker threads for traversal
   - `--dry-run` report without writing marks
+  - `--visual` / `--tui` full-screen view (needs a terminal; otherwise plain lines)
   - Subcommands: `init`, `version`, `list`, `exclude`, `include`, `stats`
 - **Execution flow**:
   1. If a subcommand is provided, execute it immediately and exit.
@@ -72,6 +73,13 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
 - `LogReporter`: plain lines with absolute paths, errors to stderr, final `summary: key=value` line.
 - `CompactReporter`: redraws one status line in place (spinner, folder count or `sizing n/m`, current folder, cut to the terminal width), prints changes above it, replaces it with a short summary plus a savings line. Colors are 16-color ANSI and honor `NO_COLOR`.
 - `stats(cache, now, home)`: the text of `asimeow stats` (total, last scan, 10 largest folders).
+
+### TUI agent
+
+- File: `src/tui.rs` (ratatui with its crossterm backend)
+- `App`: the screen state, independent of the terminal. It takes scan events (`on_event`), progress samples (`on_progress`), the summary (`on_finish`) and keys (`on_key`), and draws everything in `render(frame)`: header with a gauge (estimate from the last run's folder count, then `measuring n/m`), savings, the tree (folders grouped by the folder holding their project, e.g. `~/projects` › `app/node_modules`, sorted by size; foldable; `n` filters to changes) and activity. Colors are ANSI 16; tests render it into `TestBackend`.
+- `TuiReporter`: implements `Reporter`. `start` takes over the terminal (`ratatui::init`, which also restores it on panic); `tick` reads keys, redraws, and sets `Progress::cancel` when the user quits during a scan; `wait_for_quit` keeps the view up after the scan; `close` restores the terminal and replays the changes plus the summary through a `CompactReporter`.
+- Cancelling: `scan` checks `Progress::cancel` per folder (walk and sizing) and sets `Summary::cancelled`; `main` doesn't save the cache for a cancelled run.
 
 ### Cache agent
 
@@ -156,6 +164,7 @@ rules:
 - `anyhow` — Error handling
 - `dirs` — Home directory resolution for `~/`
 - `serde_json` — The cache file
+- `ratatui` — The `--visual` screen (re-exports `crossterm` for terminal input)
 - No other runtime dependencies: the Time Machine mark is read with `getxattr` and written with CoreServices via small FFI declarations in `src/tm.rs`
 
 ### Developer notes

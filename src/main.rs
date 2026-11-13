@@ -1,6 +1,7 @@
 use anyhow::Result;
 use asimeow::cache::{self, Cache};
 use asimeow::report::{self, CompactReporter, LogReporter};
+use asimeow::tui::{App, TuiReporter};
 use asimeow::{config, explorer, scan};
 use clap::{Parser, Subcommand};
 use std::io::{self, IsTerminal};
@@ -27,6 +28,10 @@ struct Args {
     /// Show what would be excluded without changing anything
     #[arg(long)]
     dry_run: bool,
+
+    /// Full-screen view: live progress, space saved, and the excluded folders by size
+    #[arg(long, visible_alias = "tui")]
+    visual: bool,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -126,17 +131,47 @@ fn main() -> Result<()> {
     let cache_path = Cache::default_path();
     let previous = cache_path.as_deref().map(Cache::load).unwrap_or_default();
 
-    // A terminal gets a live status line; scripts and log files get plain lines.
-    let (summary, next) = if io::stdout().is_terminal() {
-        let mut reporter = CompactReporter::new(io::stdout(), &opts, report::color_enabled());
+    let terminal = io::stdout().is_terminal();
+    let color = report::color_enabled();
+    if args.visual && !terminal {
+        eprintln!("--visual needs a terminal; printing plain lines instead.");
+    }
+
+    // --visual takes over the screen; a terminal otherwise gets a live status line;
+    // scripts and log files get plain lines.
+    let (summary, next) = if args.visual && terminal {
+        let app = App::new(
+            &opts,
+            previous.last_run.clone(),
+            previous.exclusions.len(),
+            color,
+            dirs::home_dir(),
+        );
+        let mut tui = TuiReporter::start(app);
+        match report::run(config, &opts, &previous, &mut tui) {
+            Ok((summary, next)) => {
+                if !tui.quit_requested() {
+                    tui.wait_for_quit();
+                }
+                tui.close(Some(&summary), &opts, color);
+                (summary, next)
+            }
+            Err(e) => {
+                tui.close(None, &opts, color);
+                return Err(e);
+            }
+        }
+    } else if terminal {
+        let mut reporter = CompactReporter::new(io::stdout(), &opts, color);
         report::run(config, &opts, &previous, &mut reporter)?
     } else {
         let mut reporter = LogReporter::new(io::stdout(), io::stderr(), &opts);
         report::run(config, &opts, &previous, &mut reporter)?
     };
 
-    // A dry run marked nothing, so its findings must not become the next run's history.
-    if !args.dry_run {
+    // A dry run marked nothing, so its findings must not become the next run's history;
+    // a cancelled run is incomplete.
+    if !args.dry_run && !summary.cancelled {
         if let Some(path) = &cache_path {
             if let Err(e) = next.save(path) {
                 eprintln!("⚠️  Could not save the cache: {e:#}");

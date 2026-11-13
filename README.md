@@ -91,6 +91,9 @@ The executable will be available at `target/release/asimeow`.
 # Show what would be excluded without changing anything
 ./asimeow --dry-run
 
+# Full-screen view: progress, space saved and the excluded folders by size
+./asimeow --visual
+
 # Show how much space the exclusions save, from the last scan (no new scan)
 ./asimeow stats
 
@@ -271,6 +274,40 @@ Using configuration: /Users/user/.config/asimeow/config.yaml
 happens when it is deleted and created again (`rm -rf node_modules && npm install`).
 
 Colors follow your terminal theme; set `NO_COLOR=1` to turn them off.
+
+### Visual mode (`--visual`)
+
+A full-screen view instead of lines: progress (with an estimate from the last run), the
+space saved, the excluded folders grouped by area and sorted by size, and recent activity.
+
+```
+┌ asimeow 0.2.1 ───────────────────────────────────────────────────────── done in 0.3s ┐
+│████████████████████████████████████████100% █████████████████████████████████████████│
+│23,846 folders · 77 exclusions, 0 new                                                 │
+│✓ Scan complete. Browse the folders below, q to quit.                                 │
+└──────────────────────────────────────────────────────────────────────────────────────┘
+┌ Savings ─────────────────────────────────────────────────────────────────────────────┐
+│Excluded     3.0 GB    in 77 folders       New this run +0 B      0 new · 0 recreated │
+│Last run     3.0 GB                        Change       +0 B since last run           │
+└──────────────────────────────────────────────────────────────────────────────────────┘
+┌ Where the space goes ──────────────────────────────────────────────── sorted by size ┐
+│▾ ~/projects                                                   644 MB ████████████████│
+│    · api/target                                 rust                602 MB           │
+│    · notes/.venv                                python-pyproject   42.0 MB           │
+│▾ ~/work                                                       527 MB █████████████   │
+│    · web/node_modules                           node                514 MB           │
+└──────────────────────────────────────────────────────────────────────────────────────┘
+┌ Activity ────────────────────────────────────────────────────────────────────────────┐
+│Cache: 77 known exclusions, 3.0 GB at the last run                                    │
+│✓ Done: 0 would be excluded (dry run, nothing written)                                │
+└──────────────────────────────────────────────────────────────────────────────────────┘
+ q quit · ↑↓ move · ←→ fold · n only changes · dry run: nothing is written
+```
+
+Keys: `↑`/`↓` (or `j`/`k`) move, `←`/`→` fold and unfold an area, `Enter` toggles,
+`n` shows only folders that changed in this run, `q` or `Esc` quits. The view stays open
+after the scan; quitting during a scan stops it. On quit, the changes and the summary are
+printed to the normal screen. Colors follow your terminal theme.
 
 ### In scripts and log files
 

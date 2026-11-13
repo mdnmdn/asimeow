@@ -5,3 +5,4 @@ pub mod report;
 pub mod rules;
 pub mod scan;
 pub mod tm;
+pub mod tui;

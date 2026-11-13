@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Condvar, Mutex};
 use std::thread;
@@ -75,10 +75,16 @@ pub struct Progress {
     /// Exclusion folders to size, set when the walk is done (0 while walking).
     pub to_size: AtomicUsize,
     pub sized: AtomicUsize,
+    /// Set by a reporter to stop the scan early (the user quit).
+    pub cancel: AtomicBool,
     current: Mutex<PathBuf>,
 }
 
 impl Progress {
+    fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
+
     /// The folder a worker started on most recently.
     pub fn current(&self) -> PathBuf {
         self.current.lock().unwrap().clone()
@@ -111,6 +117,8 @@ pub struct Summary {
     pub measured: usize,
     /// `excluded_bytes` of the previous run, if there was one.
     pub previous_bytes: Option<u64>,
+    /// The scan was stopped early: counts and sizes are incomplete; don't save the cache.
+    pub cancelled: bool,
     pub elapsed: Duration,
 }
 
@@ -178,6 +186,9 @@ pub fn scan(
         for _ in 0..opts.threads.max(1) {
             scope.spawn(|| {
                 while let Some(item) = found.get(next.fetch_add(1, Ordering::Relaxed)) {
+                    if progress.cancelled() {
+                        break;
+                    }
                     if let Some(entry) = walker.size(item, now) {
                         sized.lock().unwrap().insert(item.path.clone(), entry);
                     }
@@ -208,6 +219,7 @@ pub fn scan(
         new_bytes,
         measured: walker.measured.load(Ordering::Relaxed),
         previous_bytes: previous.last_run.as_ref().map(|r| r.excluded_bytes),
+        cancelled: progress.cancelled(),
         elapsed: started.elapsed(),
     };
     let next_cache = Cache {
@@ -287,6 +299,10 @@ impl Walker<'_> {
     /// Processes one directory: matches its entries against the rules, excludes what they
     /// name, and returns the subdirectories to walk next. Symlinks are never followed.
     fn process_dir(&self, path: &Path) -> Vec<PathBuf> {
+        // Once cancelled, every queued folder finishes at once and the walk drains.
+        if self.progress.cancelled() {
+            return Vec::new();
+        }
         if let Some(name) = path.file_name() {
             if self.matcher.is_ignored(&name.to_string_lossy()) {
                 self.trace(|| format!("Skipping ignored directory: {}", path.display()));
