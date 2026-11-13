@@ -1,4 +1,5 @@
 use anyhow::Result;
+use asimeow::cache::{self, Cache};
 use asimeow::report::{self, CompactReporter, LogReporter};
 use asimeow::{config, explorer, scan};
 use clap::{Parser, Subcommand};
@@ -63,6 +64,8 @@ enum Commands {
         /// Path to include in Time Machine backups
         path: String,
     },
+    /// Show how much space the exclusions save, from the last scan (no new scan)
+    Stats,
 }
 
 fn main() -> Result<()> {
@@ -86,6 +89,14 @@ fn main() -> Result<()> {
             }
             Commands::Include { path } => {
                 return explorer::include_path(path, args.verbose);
+            }
+            Commands::Stats => {
+                let cache = Cache::default_path()
+                    .map(|p| Cache::load(&p))
+                    .unwrap_or_default();
+                let home = dirs::home_dir();
+                print!("{}", report::stats(&cache, cache::now(), home.as_deref()));
+                return Ok(());
             }
         }
     }
@@ -112,14 +123,26 @@ fn main() -> Result<()> {
         verbose: args.verbose,
         dry_run: args.dry_run,
     };
+    let cache_path = Cache::default_path();
+    let previous = cache_path.as_deref().map(Cache::load).unwrap_or_default();
+
     // A terminal gets a live status line; scripts and log files get plain lines.
-    let summary = if io::stdout().is_terminal() {
+    let (summary, next) = if io::stdout().is_terminal() {
         let mut reporter = CompactReporter::new(io::stdout(), &opts, report::color_enabled());
-        report::run(config, &opts, &mut reporter)?
+        report::run(config, &opts, &previous, &mut reporter)?
     } else {
         let mut reporter = LogReporter::new(io::stdout(), io::stderr(), &opts);
-        report::run(config, &opts, &mut reporter)?
+        report::run(config, &opts, &previous, &mut reporter)?
     };
+
+    // A dry run marked nothing, so its findings must not become the next run's history.
+    if !args.dry_run {
+        if let Some(path) = &cache_path {
+            if let Err(e) = next.save(path) {
+                eprintln!("⚠️  Could not save the cache: {e:#}");
+            }
+        }
+    }
 
     if summary.failed > 0 {
         std::process::exit(1);

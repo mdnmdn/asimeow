@@ -1,14 +1,17 @@
-//! The scan engine: walks the roots, matches rules and sets exclusion marks.
+//! The scan engine: walks the roots, matches rules, sets exclusion marks, then measures
+//! the excluded folders (reusing sizes from the previous run where they are still fresh).
 //!
 //! It never prints. Findings go out as [`Event`]s over a channel; fast-changing progress
 //! (folders visited, current folder) lives in [`Progress`], which a reporter samples.
 
+use crate::cache::{self, Cache, Entry, LastRun};
 use crate::config::{Config, Rule};
 use crate::rules::Matcher;
 use crate::tm;
 use anyhow::Result;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
@@ -29,9 +32,16 @@ pub struct Options {
 pub enum Kind {
     /// Marked by this run (or would be, in a dry run).
     New,
+    /// Was excluded on an earlier run but lost its mark, usually because the folder was
+    /// deleted and recreated (`rm -rf node_modules && npm install`). Marked again.
+    Recreated,
     /// Already carried the mark.
     Already,
 }
+
+/// A cached size older than this is measured again, even if the folder looks unchanged:
+/// a folder's mtime doesn't change when files deeper inside it grow.
+pub const SIZE_TTL_SECS: u64 = 7 * 24 * 3600;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
@@ -40,6 +50,13 @@ pub enum Event {
         path: PathBuf,
         rule: String,
         kind: Kind,
+    },
+    /// The size of an exclusion folder, sent after the walk. `measured` is false when the
+    /// size came from the cache.
+    Sized {
+        path: PathBuf,
+        bytes: u64,
+        measured: bool,
     },
     /// Setting the mark failed.
     Failed { path: PathBuf, rule: String },
@@ -55,6 +72,9 @@ pub enum Event {
 #[derive(Default)]
 pub struct Progress {
     pub dirs: AtomicUsize,
+    /// Exclusion folders to size, set when the walk is done (0 while walking).
+    pub to_size: AtomicUsize,
+    pub sized: AtomicUsize,
     current: Mutex<PathBuf>,
 }
 
@@ -63,6 +83,13 @@ impl Progress {
     pub fn current(&self) -> PathBuf {
         self.current.lock().unwrap().clone()
     }
+
+    fn set_current(&self, path: &Path) {
+        // Skip rather than wait if a reporter is reading it right now.
+        if let Ok(mut current) = self.current.try_lock() {
+            *current = path.to_path_buf();
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -70,30 +97,50 @@ pub struct Summary {
     pub dirs: usize,
     /// Existing exclusion folders found, new and already marked.
     pub exclusions: usize,
+    /// Marked by this run (or would be, in a dry run), recreated folders included.
     pub newly_excluded: usize,
+    /// The part of `newly_excluded` that was excluded before and lost its mark.
+    pub recreated: usize,
     pub failed: usize,
     pub unreadable: usize,
+    /// Total size of all exclusion folders found.
+    pub excluded_bytes: u64,
+    /// Size of the folders newly excluded by this run.
+    pub new_bytes: u64,
+    /// Folders measured by this run; the others' sizes came from the cache.
+    pub measured: usize,
+    /// `excluded_bytes` of the previous run, if there was one.
+    pub previous_bytes: Option<u64>,
     pub elapsed: Duration,
 }
 
-/// Scans all roots of `config`, sending findings to `events`.
-/// Returns when the whole tree is done; `events` is dropped then, closing the channel.
+/// Scans all roots of `config`, sending findings to `events`. `previous` is the cache
+/// from the last run: it tells recreated folders apart and provides sizes.
+///
+/// Returns when the whole tree is done (`events` is dropped then, closing the channel),
+/// with the summary and the cache to save for the next run. Don't save it after a dry
+/// run: it lists folders as excluded that were never marked.
 pub fn scan(
     config: Config,
     opts: &Options,
+    previous: &Cache,
     events: Sender<Event>,
     progress: &Progress,
-) -> Result<Summary> {
+) -> Result<(Summary, Cache)> {
     let started = Instant::now();
     let walker = Walker {
         matcher: Matcher::new(config.rules, &config.ignore),
         opts,
+        previous,
         events,
         progress,
+        found: Mutex::new(Vec::new()),
         exclusions: AtomicUsize::new(0),
         newly_excluded: AtomicUsize::new(0),
+        recreated: AtomicUsize::new(0),
         failed: AtomicUsize::new(0),
         unreadable: AtomicUsize::new(0),
+        measured: AtomicUsize::new(0),
     };
 
     let mut roots = Vec::new();
@@ -109,6 +156,7 @@ pub fn scan(
         }
     }
 
+    // Walk: find exclusion folders and mark them.
     let queue = Queue::new(roots);
     thread::scope(|scope| {
         for _ in 0..opts.threads.max(1) {
@@ -120,26 +168,108 @@ pub fn scan(
         }
     });
 
-    Ok(Summary {
-        dirs: progress.dirs.load(Ordering::Relaxed),
-        exclusions: walker.exclusions.into_inner(),
-        newly_excluded: walker.newly_excluded.into_inner(),
-        failed: walker.failed.into_inner(),
-        unreadable: walker.unreadable.into_inner(),
+    // Size every exclusion folder found, in parallel.
+    let found = std::mem::take(&mut *walker.found.lock().unwrap());
+    progress.to_size.store(found.len(), Ordering::Relaxed);
+    let now = cache::now();
+    let next = AtomicUsize::new(0);
+    let sized = Mutex::new(BTreeMap::new());
+    thread::scope(|scope| {
+        for _ in 0..opts.threads.max(1) {
+            scope.spawn(|| {
+                while let Some(item) = found.get(next.fetch_add(1, Ordering::Relaxed)) {
+                    if let Some(entry) = walker.size(item, now) {
+                        sized.lock().unwrap().insert(item.path.clone(), entry);
+                    }
+                    progress.sized.fetch_add(1, Ordering::Relaxed);
+                }
+            });
+        }
+    });
+    let sized = sized.into_inner().unwrap();
+
+    let bytes_of = |path: &PathBuf| sized.get(path).map_or(0, |e| e.bytes);
+    let excluded_bytes = found.iter().map(|f| bytes_of(&f.path)).sum();
+    let new_bytes = found
+        .iter()
+        .filter(|f| f.kind != Kind::Already)
+        .map(|f| bytes_of(&f.path))
+        .sum();
+    let dirs = progress.dirs.load(Ordering::Relaxed);
+
+    let summary = Summary {
+        dirs,
+        exclusions: walker.exclusions.load(Ordering::Relaxed),
+        newly_excluded: walker.newly_excluded.load(Ordering::Relaxed),
+        recreated: walker.recreated.load(Ordering::Relaxed),
+        failed: walker.failed.load(Ordering::Relaxed),
+        unreadable: walker.unreadable.load(Ordering::Relaxed),
+        excluded_bytes,
+        new_bytes,
+        measured: walker.measured.load(Ordering::Relaxed),
+        previous_bytes: previous.last_run.as_ref().map(|r| r.excluded_bytes),
         elapsed: started.elapsed(),
-    })
+    };
+    let next_cache = Cache {
+        last_run: Some(LastRun {
+            finished_at: cache::now(),
+            dirs,
+            excluded_bytes,
+        }),
+        exclusions: sized,
+        ..Cache::default()
+    };
+    Ok((summary, next_cache))
+}
+
+/// An exclusion folder found by the walk.
+struct Found {
+    path: PathBuf,
+    rule: String,
+    kind: Kind,
+}
+
+/// Total size of the files under `root`: logical sizes (what a backup would copy), each
+/// hard-linked file counted once, symlinks not followed.
+pub fn folder_size(root: &Path) -> u64 {
+    let mut total = 0;
+    let mut linked = HashSet::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            // DirEntry::metadata does not follow symlinks.
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            if meta.is_dir() {
+                stack.push(entry.path());
+            } else if meta.is_file()
+                && (meta.nlink() < 2 || linked.insert((meta.dev(), meta.ino())))
+            {
+                total += meta.len();
+            }
+        }
+    }
+    total
 }
 
 /// Everything the workers share during one scan.
 struct Walker<'a> {
     matcher: Matcher,
     opts: &'a Options,
+    previous: &'a Cache,
     events: Sender<Event>,
     progress: &'a Progress,
+    found: Mutex<Vec<Found>>,
     exclusions: AtomicUsize,
     newly_excluded: AtomicUsize,
+    recreated: AtomicUsize,
     failed: AtomicUsize,
     unreadable: AtomicUsize,
+    measured: AtomicUsize,
 }
 
 impl Walker<'_> {
@@ -165,9 +295,7 @@ impl Walker<'_> {
         }
 
         self.progress.dirs.fetch_add(1, Ordering::Relaxed);
-        if let Ok(mut current) = self.progress.current.try_lock() {
-            *current = path.to_path_buf();
-        }
+        self.progress.set_current(path);
         self.trace(|| format!("Processing path: {}", path.display()));
 
         let entries = match fs::read_dir(path) {
@@ -237,7 +365,12 @@ impl Walker<'_> {
                 Kind::Already
             } else if self.opts.dry_run || tm::set_exclusion_mark(&path, true) {
                 self.newly_excluded.fetch_add(1, Ordering::Relaxed);
-                Kind::New
+                if self.previous.exclusions.contains_key(&path) {
+                    self.recreated.fetch_add(1, Ordering::Relaxed);
+                    Kind::Recreated
+                } else {
+                    Kind::New
+                }
             } else {
                 self.failed.fetch_add(1, Ordering::Relaxed);
                 self.send(Event::Failed {
@@ -247,11 +380,48 @@ impl Walker<'_> {
                 continue;
             };
             self.send(Event::Exclusion {
+                path: path.clone(),
+                rule: rule.name.clone(),
+                kind,
+            });
+            self.found.lock().unwrap().push(Found {
                 path,
                 rule: rule.name.clone(),
                 kind,
             });
         }
+    }
+
+    /// The folder's size: from the cache if the folder is the same one (same inode and
+    /// mtime) and the size is younger than [`SIZE_TTL_SECS`], measured otherwise.
+    fn size(&self, found: &Found, now: u64) -> Option<Entry> {
+        let meta = fs::metadata(&found.path).ok()?;
+        let (inode, mtime_ns) = (meta.ino(), meta.mtime() * 1_000_000_000 + meta.mtime_nsec());
+        let fresh = self.previous.exclusions.get(&found.path).filter(|e| {
+            e.inode == inode
+                && e.mtime_ns == mtime_ns
+                && now.saturating_sub(e.sized_at) < SIZE_TTL_SECS
+        });
+        let (bytes, sized_at, measured) = match fresh {
+            Some(entry) => (entry.bytes, entry.sized_at, false),
+            None => {
+                self.progress.set_current(&found.path);
+                self.measured.fetch_add(1, Ordering::Relaxed);
+                (folder_size(&found.path), now, true)
+            }
+        };
+        self.send(Event::Sized {
+            path: found.path.clone(),
+            bytes,
+            measured,
+        });
+        Some(Entry {
+            rule: found.rule.clone(),
+            inode,
+            mtime_ns,
+            bytes,
+            sized_at,
+        })
     }
 }
 

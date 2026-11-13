@@ -1,4 +1,5 @@
 // Test modules
+mod cache_test;
 mod config_test;
 mod exclusion_test;
 mod report_test;

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use asimeow::cache::Cache;
 use asimeow::config;
 use asimeow::scan::{self, Event, Options, Progress, Summary};
 use std::fs::{self, File};
@@ -17,7 +18,7 @@ fn scan_all(
         verbose: false,
         dry_run,
     };
-    let summary = scan::scan(config, &opts, tx, &Progress::default())?;
+    let (summary, _) = scan::scan(config, &opts, &Cache::default(), tx, &Progress::default())?;
     Ok((summary, rx.into_iter().collect()))
 }
 

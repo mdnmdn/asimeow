@@ -91,6 +91,9 @@ The executable will be available at `target/release/asimeow`.
 # Show what would be excluded without changing anything
 ./asimeow --dry-run
 
+# Show how much space the exclusions save, from the last scan (no new scan)
+./asimeow stats
+
 # Create a default configuration file in ~/.config/asimeow/
 ./asimeow init
 
@@ -221,7 +224,10 @@ When you run `asimeow init`, a default configuration file will be created with c
    - If not, adds the mark (the same one `tmutil addexclusion` writes, but set in-process, which is much faster)
    - Displays the status with visual indicators (✅ for newly excluded, 🟡 for already excluded)
 6. Directories listed in the exclusions are not explored further, and symlinked directories are never followed
-7. With the verbose flag (-v), additional information is displayed
+7. After the walk, every excluded folder is measured (the logical size of its files, hard links counted once).
+   Sizes are cached in `~/Library/Caches/asimeow/state.json` and reused while the folder is unchanged
+   (same inode and modification time) and the size is less than 7 days old, so repeat runs stay fast
+8. With the verbose flag (-v), additional information is displayed
 
 ### Manual Exclusion Commands
 
@@ -256,9 +262,13 @@ Using configuration: /Users/user/.config/asimeow/config.yaml
 ```
 
 ```
-✓ Done in 0.2s · 21,967 folders · 77 exclusions, 2 new
+✓ Done in 0.4s · 21,967 folders · 77 exclusions, 2 new (1 recreated)
+  2.9 GB excluded · +668 MB this run · +0.6 GB since last run
   2 folders could not be read; run with -v to list them
 ```
+
+"Recreated" means the folder was excluded on an earlier run but lost its mark, which
+happens when it is deleted and created again (`rm -rf node_modules && npm install`).
 
 Colors follow your terminal theme; set `NO_COLOR=1` to turn them off.
 
@@ -271,7 +281,7 @@ asimeow prints plain lines with absolute paths and ends with a `key=value` summa
 Using configuration: /Users/user/.config/asimeow/config.yaml
 ✅ /Users/user/works/projects/my-rust-project/target - rust
 ✅ /Users/user/works/projects/my-node-project/dist - node
-summary: folders=21967 exclusions=77 new=2 failed=0 unreadable=2 seconds=0.22
+summary: folders=21967 exclusions=77 new=2 recreated=1 failed=0 unreadable=2 excluded_bytes=2903197910 new_bytes=668000000 seconds=0.42
 ```
 
 Failures (`❌`) and warnings (`⚠️`) go to stderr. The exit code is 1 if any folder could not be excluded.
@@ -303,7 +313,21 @@ Found match for rule 'rust' at: /Users/user/works/projects/my-rust-project/cargo
 Found match for rule 'node' at: /Users/user/works/projects/my-node-project/package.json
 🟡 /Users/user/works/projects/my-node-project/node_modules - node
 ✅ /Users/user/works/projects/my-node-project/dist - node
-summary: folders=42 exclusions=3 new=2 failed=0 unreadable=0 seconds=0.01
+Size of /Users/user/works/projects/my-rust-project/target: 548 MB (measured)
+Size of /Users/user/works/projects/my-node-project/node_modules: 212 MB (cached)
+Size of /Users/user/works/projects/my-node-project/dist: 1.2 MB (measured)
+summary: folders=42 exclusions=3 new=2 recreated=0 failed=0 unreadable=0 excluded_bytes=761200000 new_bytes=549200000 seconds=0.05
+```
+
+### Stats Command Output
+
+```
+2.9 GB excluded in 77 folders · last scan 2 h ago (21,967 folders scanned)
+
+Largest:
+   548 MB  ~/projects/api/target  rust
+   514 MB  ~/projects/web/node_modules  node
+   388 MB  ~/tools/editor-plugins/node_modules  node
 ```
 
 ### List Command Output
@@ -390,7 +414,7 @@ Asimeow automatically identifies and excludes these directories based on project
 
 - [x] Analyze current time machine exclusions of specific paths
 - [ ] Analyze exclusion folder "decay" in order to identify old and unused exclusions and clean from disk
-- [ ] Provide detailed statistics about excluded directories and their sizes
+- [x] Provide detailed statistics about excluded directories and their sizes
 - [ ] Improve tests
 - [ ] Simplify access to configuration via cli options
 

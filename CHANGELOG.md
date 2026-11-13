@@ -11,14 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--dry-run`: report what would be excluded without changing anything
 - In a terminal, a live status line (folders scanned, current folder) and a short summary
 - Exit code 1 when a folder could not be excluded
+- Space savings: every excluded folder is measured, and the summary shows the total
+  excluded, what this run added and the change since the last run
+  (`9.3 GB excluded · +668 MB this run · +0.6 GB since last run`)
+- Recreated folders: a folder that was excluded before but lost its mark (deleting and
+  recreating `node_modules` drops it) is reported as recreated, not as new
+- `asimeow stats`: the savings and the 10 largest excluded folders from the last scan,
+  without scanning
+- A cache in `~/Library/Caches/asimeow/state.json` remembers each excluded folder and its
+  size. A cached size is reused while the folder has the same inode and mtime and the size
+  is less than 7 days old. Dry runs don't update it.
 
 ### Changed
 - Quiet output: only changes are listed (newly excluded folders, failures, warnings).
   Already-excluded folders and unreadable folders (such as `~/.Trash`) are counted in the
   summary and listed only with `-v`.
 - When the output is not a terminal, plain lines end with one
-  `summary: folders=… exclusions=… new=… failed=… unreadable=… seconds=…` line, which
-  replaces the three "Total …" lines
+  `summary: folders=… exclusions=… new=… recreated=… failed=… unreadable=…
+  excluded_bytes=… new_bytes=… seconds=…` line, which replaces the three "Total …" lines
 - The scan engine (`scan` module) no longer prints; it sends events that a reporter
   (`report` module) turns into output
 - Much faster scans. Exclusion marks are read from the folder's extended attribute and

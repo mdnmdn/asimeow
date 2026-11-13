@@ -4,9 +4,10 @@
 //! - [`CompactReporter`]: a live status line in a terminal, plus one line per change.
 //!
 //! Both print only what changed by default (newly excluded folders, failures, warnings)
-//! and finish with a summary. `-v` adds already-excluded folders, unreadable folders and
-//! traces.
+//! and finish with a summary that includes how much space the exclusions save. `-v` adds
+//! already-excluded folders, unreadable folders, folder sizes and traces.
 
+use crate::cache::Cache;
 use crate::config::Config;
 use crate::scan::{self, Event, Kind, Options, Progress, Summary};
 use anyhow::Result;
@@ -28,11 +29,17 @@ pub trait Reporter {
 }
 
 /// Runs a scan on a worker thread and feeds its events to `reporter` as they arrive.
-pub fn run(config: Config, opts: &Options, reporter: &mut dyn Reporter) -> Result<Summary> {
+/// Returns the summary and the cache to save for the next run (see [`scan::scan`]).
+pub fn run(
+    config: Config,
+    opts: &Options,
+    previous: &Cache,
+    reporter: &mut dyn Reporter,
+) -> Result<(Summary, Cache)> {
     let progress = Progress::default();
     let (tx, rx) = mpsc::channel();
-    let summary = thread::scope(|s| {
-        let scan = s.spawn(|| scan::scan(config, opts, tx, &progress));
+    let (summary, cache) = thread::scope(|s| {
+        let scan = s.spawn(|| scan::scan(config, opts, previous, tx, &progress));
         let mut last_tick = Instant::now();
         loop {
             match rx.recv_timeout(TICK) {
@@ -48,7 +55,7 @@ pub fn run(config: Config, opts: &Options, reporter: &mut dyn Reporter) -> Resul
         scan.join().expect("scan thread panicked")
     })?;
     reporter.finish(&summary);
-    Ok(summary)
+    Ok((summary, cache))
 }
 
 /// Plain lines with absolute paths, for scripts and log files. Errors go to `err`.
@@ -80,9 +87,31 @@ impl<O: Write, E: Write> Reporter for LogReporter<O, E> {
                 rule,
                 kind: Kind::New,
             } => writeln!(self.out, "✅ {} - {}{}", path.display(), rule, dry),
+            Event::Exclusion {
+                path,
+                rule,
+                kind: Kind::Recreated,
+            } => writeln!(
+                self.out,
+                "✅ {} - {} (recreated){}",
+                path.display(),
+                rule,
+                dry
+            ),
             Event::Exclusion { path, rule, .. } if self.verbose => {
                 writeln!(self.out, "🟡 {} - {}", path.display(), rule)
             }
+            Event::Sized {
+                path,
+                bytes,
+                measured,
+            } if self.verbose => writeln!(
+                self.out,
+                "Size of {}: {} ({})",
+                path.display(),
+                format_bytes(*bytes),
+                if *measured { "measured" } else { "cached" }
+            ),
             Event::Failed { path, rule } => writeln!(
                 self.err,
                 "❌ {} - {} (could not be excluded)",
@@ -101,12 +130,16 @@ impl<O: Write, E: Write> Reporter for LogReporter<O, E> {
     fn finish(&mut self, s: &Summary) {
         let _ = writeln!(
             self.out,
-            "summary: folders={} exclusions={} new={} failed={} unreadable={} seconds={:.2}{}",
+            "summary: folders={} exclusions={} new={} recreated={} failed={} unreadable={} \
+             excluded_bytes={} new_bytes={} seconds={:.2}{}",
             s.dirs,
             s.exclusions,
             s.newly_excluded,
+            s.recreated,
             s.failed,
             s.unreadable,
+            s.excluded_bytes,
+            s.new_bytes,
             s.elapsed.as_secs_f64(),
             if self.dry_run { " dry_run=true" } else { "" }
         );
@@ -185,6 +218,18 @@ impl<W: Write> Reporter for CompactReporter<W> {
                     self.dim(&format!("{rule}{dry}"))
                 )
             }
+            Event::Exclusion {
+                path,
+                rule,
+                kind: Kind::Recreated,
+            } => {
+                let dry = if self.dry_run { " (dry run)" } else { "" };
+                format!(
+                    "✅ {}  {}",
+                    self.short(path),
+                    self.dim(&format!("{rule} · recreated{dry}"))
+                )
+            }
             Event::Exclusion { path, rule, .. } if self.verbose => {
                 format!("🟡 {}  {}", self.short(path), self.dim(rule))
             }
@@ -199,6 +244,18 @@ impl<W: Write> Reporter for CompactReporter<W> {
                 format!("⚠️  {}", self.paint("33", &message))
             }
             Event::Warning(message) => format!("⚠️  {}", self.paint("33", message)),
+            Event::Sized {
+                path,
+                bytes,
+                measured,
+            } if self.verbose => {
+                let how = if *measured { "measured" } else { "cached" };
+                self.dim(&format!(
+                    "{} {}  {how}",
+                    format_bytes(*bytes),
+                    self.short(path)
+                ))
+            }
             Event::Trace(message) => self.dim(message),
             _ => return,
         };
@@ -208,11 +265,21 @@ impl<W: Write> Reporter for CompactReporter<W> {
     fn tick(&mut self, progress: &Progress) {
         const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
         self.frame = (self.frame + 1) % SPINNER.len();
-        let head = format!(
-            "{} {} folders · ",
-            SPINNER[self.frame],
-            group_digits(progress.dirs.load(Ordering::Relaxed))
-        );
+        let to_size = progress.to_size.load(Ordering::Relaxed);
+        let head = if to_size == 0 {
+            format!(
+                "{} {} folders · ",
+                SPINNER[self.frame],
+                group_digits(progress.dirs.load(Ordering::Relaxed))
+            )
+        } else {
+            format!(
+                "{} sizing {}/{} · ",
+                SPINNER[self.frame],
+                group_digits(progress.sized.load(Ordering::Relaxed)),
+                group_digits(to_size)
+            )
+        };
         // Keep the line one column short of the width so it never wraps.
         let room = terminal_width().saturating_sub(head.chars().count() + 1);
         let current = truncate_left(&self.short(&progress.current()), room);
@@ -231,6 +298,9 @@ impl<W: Write> Reporter for CompactReporter<W> {
             counted(s.exclusions, "exclusion", "exclusions"),
             group_digits(s.newly_excluded)
         );
+        if s.recreated > 0 {
+            text += &format!(" ({} recreated)", group_digits(s.recreated));
+        }
         if s.failed > 0 {
             text += &self.paint("31", &format!(", {} failed", s.failed));
         }
@@ -238,6 +308,7 @@ impl<W: Write> Reporter for CompactReporter<W> {
             text += &self.dim(" · dry run, nothing written");
         }
         self.line(text);
+        self.line(format!("  {}", savings(s)));
         if s.unreadable > 0 && !self.verbose {
             let hint = format!(
                 "  {} not be read; run with -v to list them",
@@ -246,6 +317,83 @@ impl<W: Write> Reporter for CompactReporter<W> {
             self.line(self.dim(&hint));
         }
         let _ = self.out.flush();
+    }
+}
+
+/// `9.3 GB excluded · +668 MB this run · +0.6 GB since last run`.
+/// The last two parts are left out when there's nothing new or no previous run.
+pub fn savings(s: &Summary) -> String {
+    let mut text = format!("{} excluded", format_bytes(s.excluded_bytes));
+    if s.newly_excluded > 0 {
+        text += &format!(" · +{} this run", format_bytes(s.new_bytes));
+    }
+    if let Some(previous) = s.previous_bytes {
+        let (sign, delta) = if s.excluded_bytes >= previous {
+            ("+", s.excluded_bytes - previous)
+        } else {
+            ("−", previous - s.excluded_bytes)
+        };
+        text += &format!(" · {sign}{} since last run", format_bytes(delta));
+    }
+    text
+}
+
+/// What `asimeow stats` prints: savings and the largest folders, from the cache alone.
+pub fn stats(cache: &Cache, now: u64, home: Option<&Path>) -> String {
+    let Some(run) = &cache.last_run else {
+        return "No scan recorded yet. Run asimeow first.\n".to_string();
+    };
+    let short = |path: &Path| match home.and_then(|h| path.strip_prefix(h).ok()) {
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.display().to_string(),
+    };
+
+    let mut out = format!(
+        "{} excluded in {} · last scan {} ({})\n",
+        format_bytes(run.excluded_bytes),
+        counted(cache.exclusions.len(), "folder", "folders"),
+        ago(now.saturating_sub(run.finished_at)),
+        counted(run.dirs, "folder scanned", "folders scanned"),
+    );
+    let mut largest: Vec<_> = cache.exclusions.iter().collect();
+    largest.sort_by(|a, b| b.1.bytes.cmp(&a.1.bytes).then(a.0.cmp(b.0)));
+    if !largest.is_empty() {
+        out += "\nLargest:\n";
+    }
+    for (path, entry) in largest.iter().take(10) {
+        out += &format!(
+            "{:>9}  {}  {}\n",
+            format_bytes(entry.bytes),
+            short(path),
+            entry.rule
+        );
+    }
+    out
+}
+
+/// `45` → `just now`, `7200` → `2 h ago`, `200000` → `2 days ago`.
+fn ago(seconds: u64) -> String {
+    match seconds {
+        0..60 => "just now".to_string(),
+        60..3600 => format!("{} min ago", seconds / 60),
+        3600..86400 => format!("{} h ago", seconds / 3600),
+        _ => counted((seconds / 86400) as usize, "day ago", "days ago"),
+    }
+}
+
+/// Decimal units, like Finder: `668000000` → `668 MB`, `9319000000` → `9.3 GB`.
+pub fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1000.0 && unit < UNITS.len() - 1 {
+        value /= 1000.0;
+        unit += 1;
+    }
+    if unit == 0 || value >= 100.0 {
+        format!("{value:.0} {}", UNITS[unit])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
     }
 }
 

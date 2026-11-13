@@ -28,10 +28,10 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
   - `-v, --verbose`
   - `-t, --threads <N>` worker threads for traversal
   - `--dry-run` report without writing marks
-  - Subcommands: `init`, `version`, `list`, `exclude`, `include`
+  - Subcommands: `init`, `version`, `list`, `exclude`, `include`, `stats`
 - **Execution flow**:
   1. If a subcommand is provided, execute it immediately and exit.
-  2. Otherwise, load configuration (auto-detect path), pick a reporter (`CompactReporter` if stdout is a terminal, else `LogReporter`) and call `report::run`.
+  2. Otherwise, load configuration (auto-detect path) and the cache, pick a reporter (`CompactReporter` if stdout is a terminal, else `LogReporter`), call `report::run`, and save the returned cache (never after `--dry-run`).
 
 ### Configuration agent
 
@@ -49,11 +49,13 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
 ### Scan agent (engine)
 
 - File: `src/scan.rs`. It never prints.
-- **API**: `scan(config, &Options, Sender<Event>, &Progress) -> Result<Summary>`.
+- **API**: `scan(config, &Options, previous: &Cache, Sender<Event>, &Progress) -> Result<(Summary, Cache)>`. It returns the cache to save for the next run.
   - `Options { threads, verbose, dry_run }`.
-  - `Event`: `Exclusion { path, rule, kind: New | Already }`, `Failed`, `Unreadable` (a folder that could not be read), `Warning` (always shown, e.g. a missing root), `Trace` (only sent with `verbose`).
-  - `Progress`: atomic folder count plus the current folder; workers update it and reporters sample it.
-  - `Summary { dirs, exclusions, newly_excluded, failed, unreadable, elapsed }`.
+  - `Event`: `Exclusion { path, rule, kind: New | Recreated | Already }`, `Sized { path, bytes, measured }`, `Failed`, `Unreadable` (a folder that could not be read), `Warning` (always shown, e.g. a missing root), `Trace` (only sent with `verbose`).
+  - `Recreated`: the mark was missing but the previous cache knows the path, so the folder was excluded before (usually deleted and recreated).
+  - `Progress`: atomic folder count, the sizing counters (`to_size`, `sized`) and the current folder; workers update it and reporters sample it.
+  - `Summary { dirs, exclusions, newly_excluded, recreated, failed, unreadable, excluded_bytes, new_bytes, measured, previous_bytes, elapsed }`.
+- **Sizing phase** (after the walk): the same number of threads take the found exclusion folders one by one. `size()` reuses the cached size when the inode and mtime (ns) match and it's younger than `SIZE_TTL_SECS` (7 days); otherwise `folder_size()` measures it (logical `st_size` sum, hard links once, symlinks not followed).
 - **Workers**: scoped threads share a private `Walker` (matcher, options, event sender, counters). Each pops a directory from the `Queue`, calls `process_dir()`, and hands the returned subdirectories back with `Queue::finish`, which adds the children and retires the parent in one locked step. The `Queue` is a `VecDeque<PathBuf>` plus a `pending` count under one `Mutex` with a `Condvar`, so the walk can't end while a worker still holds work.
 - **`process_dir(path)`**:
   - Skips directories whose name matches an `ignore` pattern.
@@ -68,7 +70,14 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
 - `run(config, &Options, &mut dyn Reporter)`: runs `scan` on a scoped thread and feeds events to the reporter as they arrive; calls `tick` about every 80 ms and `finish` with the `Summary`.
 - `Reporter` trait: `event`, `tick` (optional), `finish`.
 - `LogReporter`: plain lines with absolute paths, errors to stderr, final `summary: key=value` line.
-- `CompactReporter`: redraws one status line in place (spinner, folder count, current folder, cut to the terminal width), prints changes above it, replaces it with a short summary. Colors are 16-color ANSI and honor `NO_COLOR`.
+- `CompactReporter`: redraws one status line in place (spinner, folder count or `sizing n/m`, current folder, cut to the terminal width), prints changes above it, replaces it with a short summary plus a savings line. Colors are 16-color ANSI and honor `NO_COLOR`.
+- `stats(cache, now, home)`: the text of `asimeow stats` (total, last scan, 10 largest folders).
+
+### Cache agent
+
+- File: `src/cache.rs`
+- `Cache { version, last_run: Option<LastRun>, exclusions: BTreeMap<PathBuf, Entry> }`; `Entry { rule, inode, mtime_ns, bytes, sized_at }`; `LastRun { finished_at, dirs, excluded_bytes }`.
+- `Cache::default_path()` → `~/Library/Caches/asimeow/state.json` (Time Machine skips it). `load` returns an empty cache for a missing, corrupt or other-version file; `save` writes atomically (temp file + rename). JSON via `serde_json`.
 
 ### Rules agent
 
@@ -137,6 +146,7 @@ rules:
 - `./asimeow list [path]` — List Time Machine exclusions
 - `./asimeow exclude <path>` — Exclude a path from backups
 - `./asimeow include <path>` — Include a path in backups
+- `./asimeow stats` — Space saved and largest excluded folders, from the cache
 
 ### Dependencies
 
@@ -145,6 +155,7 @@ rules:
 - `clap` — Command-line argument parsing
 - `anyhow` — Error handling
 - `dirs` — Home directory resolution for `~/`
+- `serde_json` — The cache file
 - No other runtime dependencies: the Time Machine mark is read with `getxattr` and written with CoreServices via small FFI declarations in `src/tm.rs`
 
 ### Developer notes
