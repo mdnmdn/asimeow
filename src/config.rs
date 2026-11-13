@@ -4,7 +4,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub roots: Vec<Root>,
     #[serde(default)]
@@ -12,12 +12,12 @@ pub struct Config {
     pub rules: Vec<Rule>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Root {
     pub path: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Rule {
     pub name: String,
     pub file_match: String,
@@ -199,9 +199,6 @@ fn ensure_dir_exists(file_path: &str) -> Result<()> {
 pub fn load_config(config_path: Option<&str>, verbose: bool) -> Result<(Config, String)> {
     // Find the config file
     let config_path_str = find_config_file(config_path)?;
-
-    // Print the configuration path
-    println!("Using configuration: {}", config_path_str);
 
     if verbose {
         println!("Reading config from: {}", config_path_str);

@@ -5,7 +5,7 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
 ### Goal
 
 - **Primary goal**: Identify development artifacts (e.g., `node_modules`, `target`, `dist`) inside project folders and exclude them from macOS Time Machine backups to save space and speed up backups.
-- **Approach**: Recursively traverse configured root folders, match project indicators (like `package.json`, `Cargo.toml`), and exclude rule-defined directories using `tmutil`.
+- **Approach**: Recursively traverse configured root folders, match project indicators (like `package.json`, `Cargo.toml`), and exclude rule-defined directories by setting Time Machine's sticky exclusion mark (the one `tmutil addexclusion` writes).
 
 ## Behaviours (what the tool does)
 
@@ -13,10 +13,10 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
 - **Ignore directories**: Skips directories matching `ignore` patterns (glob on the directory name, e.g., `.git`).
 - **Manual control**:
   - `list [path]`: Show Time Machine exclusion status for a directory or a single path.
-  - `exclude <path>`: Force-exclude a directory or file via `tmutil addexclusion`.
-  - `include <path>`: Remove exclusion via `tmutil removeexclusion`.
+  - `exclude <path>`: Force-exclude a directory or file by setting the sticky exclusion mark.
+  - `include <path>`: Remove the sticky exclusion mark (and report if a parent folder or a system rule still excludes it).
 - **Initialization**: `init` generates a default `config.yaml` either locally or at `~/.config/asimeow/config.yaml` with common presets for many ecosystems.
-- **Reporting**: Prints concise status lines (✅ newly excluded, 🟡 already excluded) and summary totals (processed paths, exclusions found, newly excluded) when relevant or in verbose mode.
+- **Reporting**: Prints only changes (✅ newly excluded, ❌ failed, ⚠️ warnings) and a summary. In a terminal, a live status line shows progress; otherwise plain lines end with a `summary: key=value …` line. `-v` also lists 🟡 already-excluded and unreadable folders plus per-folder traces. Exit code 1 if any exclusion failed.
 
 ## How it works (internal architecture)
 
@@ -27,10 +27,12 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
   - `-c, --config` path (defaults to auto-detection if left as the default value `config.yaml`)
   - `-v, --verbose`
   - `-t, --threads <N>` worker threads for traversal
-  - Subcommands: `init`, `version`, `list`, `exclude`, `include`
+  - `--dry-run` report without writing marks
+  - `--visual` / `--tui` full-screen view (needs a terminal; otherwise plain lines)
+  - Subcommands: `init`, `version`, `list`, `exclude`, `include`, `stats`
 - **Execution flow**:
   1. If a subcommand is provided, execute it immediately and exit.
-  2. Otherwise, load configuration (auto-detect path) and run the explorer with the selected thread count.
+  2. Otherwise, load configuration (auto-detect path) and the cache, pick a reporter (`CompactReporter` if stdout is a terminal, else `LogReporter`), call `report::run`, and save the returned cache (never after `--dry-run`).
 
 ### Configuration agent
 
@@ -45,36 +47,60 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
   - `load_config(path, verbose)`: reads, parses YAML, prints loaded rules in verbose mode, and validates `roots`.
   - `expand_tilde(path)`: resolves `~/` to the user home directory.
 
-### Explorer agent (orchestrator)
+### Scan agent (engine)
 
-- File: `src/explorer.rs`
-- **State model**:
-  - `State` with thread-safe counters and a shared queue: `folder_queue`, `exclusion_found`, `processed_paths`, `active_tasks`, `processing_complete`, `newly_excluded` (all protected by `RwLock`).
-  - Simple in-memory work queue (`Vec<PathBuf>`) managed under locks; workers pop from the front.
-- **Workers**:
-  - `run_workers(state, rules, thread_count, verbose, ignore_patterns)`: spawns `thread_count` threads. Each thread repeatedly pulls a path from the queue and calls `process_path()` until the queue empties and no tasks are active.
-  - Completion is detected when the queue is empty and `active_tasks == 0`, then `processing_complete` is set.
-- **Traversal**:
-  - `run_explorer(config, threads, verbose)`: enqueues each `root` (with `~` expansion), then starts workers. After completion, prints totals.
-  - `process_path(path, state, rules, verbose, ignore_patterns)`:
-    - Validates path exists and is a directory.
-    - Applies ignore checks against the current directory name using glob patterns from `ignore`.
-    - Reads entries once, collecting subdirectories while evaluating rule matches.
-    - For each file/entry in the current directory, matches `rule.file_match` using glob semantics (case-insensitive via lowercase comparisons).
-    - On a rule match:
-      - For each `exclusions` item, builds `exclusion_path = current_dir / exclusion` and attempts exclusion.
-      - Records `directory_to_ignore` to avoid descending into newly excluded directories.
-      - Special-case: if `exclusions` contains "." or "..", the function returns early (treat as do-not-descend behaviour for current or parent).
-    - Finally, enqueues subdirectories that are not ignored and not among the excluded dir names.
+- File: `src/scan.rs`. It never prints.
+- **API**: `scan(config, &Options, previous: &Cache, Sender<Event>, &Progress) -> Result<(Summary, Cache)>`. It returns the cache to save for the next run.
+  - `Options { threads, verbose, dry_run }`.
+  - `Event`: `Exclusion { path, rule, kind: New | Recreated | Already }`, `Sized { path, bytes, measured }`, `Failed`, `Unreadable` (a folder that could not be read), `Warning` (always shown, e.g. a missing root), `Trace` (only sent with `verbose`).
+  - `Recreated`: the mark was missing but the previous cache knows the path, so the folder was excluded before (usually deleted and recreated).
+  - `Progress`: atomic folder count, the sizing counters (`to_size`, `sized`) and the current folder; workers update it and reporters sample it.
+  - `Summary { dirs, exclusions, newly_excluded, recreated, failed, unreadable, excluded_bytes, new_bytes, measured, previous_bytes, elapsed }`.
+- **Sizing phase** (after the walk): the same number of threads take the found exclusion folders one by one. `size()` reuses the cached size when the inode and mtime (ns) match and it's younger than `SIZE_TTL_SECS` (7 days); otherwise `folder_size()` measures it (logical `st_size` sum, hard links once, symlinks not followed).
+- **Workers**: scoped threads share a private `Walker` (matcher, options, event sender, counters). Each pops a directory from the `Queue`, calls `process_dir()`, and hands the returned subdirectories back with `Queue::finish`, which adds the children and retires the parent in one locked step. The `Queue` is a `VecDeque<PathBuf>` plus a `pending` count under one `Mutex` with a `Condvar`, so the walk can't end while a worker still holds work.
+- **`process_dir(path)`**:
+  - Skips directories whose name matches an `ignore` pattern.
+  - Reads entries once. It matches each name against the rules and collects subdirectories with `DirEntry::file_type()`, which does not follow symlinks.
+  - On a rule match, `process_exclusion` checks each `exclusions` item (`current_dir / exclusion`) that exists: already marked → `Already`; otherwise it writes the mark (skipped with `dry_run`) → `New`; a failed write → `Failed`.
+  - Never descends into excluded folders. If `exclusions` contains "." or "..", it stops below this directory.
+  - Returns the remaining subdirectories to walk next.
+
+### Report agent
+
+- File: `src/report.rs`
+- `run(config, &Options, &mut dyn Reporter)`: runs `scan` on a scoped thread and feeds events to the reporter as they arrive; calls `tick` about every 80 ms and `finish` with the `Summary`.
+- `Reporter` trait: `event`, `tick` (optional), `finish`.
+- `LogReporter`: plain lines with absolute paths, errors to stderr, final `summary: key=value` line.
+- `CompactReporter`: redraws one status line in place (spinner, folder count or `sizing n/m`, current folder, cut to the terminal width), prints changes above it, replaces it with a short summary plus a savings line. Colors are 16-color ANSI and honor `NO_COLOR`.
+- `stats(cache, now, home)`: the text of `asimeow stats` (total, last scan, 10 largest folders).
+
+### TUI agent
+
+- File: `src/tui.rs` (ratatui with its crossterm backend)
+- `App`: the screen state, independent of the terminal. It takes scan events (`on_event`), progress samples (`on_progress`), the summary (`on_finish`) and keys (`on_key`), and draws everything in `render(frame)`: header with a gauge (estimate from the last run's folder count, then `measuring n/m`), savings, the tree (folders grouped by the folder holding their project, e.g. `~/projects` › `app/node_modules`, sorted by size; foldable; `n` filters to changes) and activity. Colors are ANSI 16; tests render it into `TestBackend`.
+- `TuiReporter`: implements `Reporter`. `start` takes over the terminal (`ratatui::init`, which also restores it on panic); `tick` reads keys, redraws, and sets `Progress::cancel` when the user quits during a scan; `wait_for_quit` keeps the view up after the scan; `close` restores the terminal and replays the changes plus the summary through a `CompactReporter`.
+- Cancelling: `scan` checks `Progress::cancel` per folder (walk and sizing) and sets `Summary::cancelled`; `main` doesn't save the cache for a cancelled run.
+
+### Cache agent
+
+- File: `src/cache.rs`
+- `Cache { version, last_run: Option<LastRun>, exclusions: BTreeMap<PathBuf, Entry> }`; `Entry { rule, inode, mtime_ns, bytes, sized_at }`; `LastRun { finished_at, dirs, excluded_bytes }`.
+- `Cache::default_path()` → `~/Library/Caches/asimeow/state.json` (Time Machine skips it). `load` returns an empty cache for a missing, corrupt or other-version file; `save` writes atomically (temp file + rename). JSON via `serde_json`.
+
+### Rules agent
+
+- File: `src/rules.rs`
+- `Matcher::new(rules, ignore)` compiles everything once. Literal `file_match` names (most rules) go into a hash map; real globs (`*.csproj`) are matched in order. Matching is case-insensitive and the first rule in config order wins.
+- `is_ignored(dir_name)`: glob match of `ignore` patterns on a directory name (case-sensitive).
 
 ### Time Machine integration agent
 
-- File: `src/explorer.rs`
+- File: `src/tm.rs`
 - **Functions**:
-  - `is_excluded_from_timemachine(path)`: runs `tmutil isexcluded <path>` and parses `[Excluded]`.
-  - `exclude_from_timemachine(path)`: runs `tmutil addexclusion <path>`; returns false if already excluded.
-  - `include_in_timemachine(path)`: runs `tmutil removeexclusion <path>`; returns false if already included.
-- **User-facing commands**:
+  - `has_exclusion_mark(path)`: reads the sticky exclusion xattr `com.apple.metadata:com_apple_backup_excludeItem` (no subprocess). Ignores system-wide and inherited exclusions.
+  - `set_exclusion_mark(path, exclude)`: sets or clears the mark with CoreServices `CSBackupSetItemExcluded`, the call `tmutil addexclusion` and cargo use underneath (byte-identical mark, under 1 ms instead of seconds), then verifies it.
+  - `is_excluded(path)`: runs `tmutil isexcluded <path>` (includes system and inherited exclusions). Used by `list`, `exclude` and `include`.
+- **User-facing commands** (in `src/explorer.rs`, which only holds these manual commands):
   - `exclude_path(path, verbose)` / `include_path(path, verbose)` wrap the above with path expansion, type detection (file/dir), and user messages.
   - `list_exclusions(path?)`: directory listing mode (if a directory ending with `/` or no path provided) or single item status mode; prints legend and markers.
 
@@ -82,10 +108,10 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
 
 1. CLI parses args and subcommands.
 2. If no subcommand: configuration is located and parsed.
-3. Roots are enqueued; worker threads process the queue concurrently.
-4. Each directory read checks for rule indicators and applies exclusions.
-5. Exclusions are attempted with `tmutil`, producing ✅ or 🟡 output lines.
-6. Counters are updated and a concise summary is printed at the end.
+3. `report::run` starts the scan on a worker thread; roots are enqueued and worker threads process the queue concurrently.
+4. Each directory read checks for rule indicators and applies exclusions; marks are read and written in-process.
+5. Findings flow as `Event`s to the reporter, which prints changes; progress is sampled for the live status line.
+6. The reporter prints the `Summary`; `main` exits with 1 if any exclusion failed.
 
 ## Configuration quick reference
 
@@ -113,7 +139,7 @@ rules:
 
 - **Platform**: macOS only. Requires `tmutil` available in PATH.
 - **Permissions**: Some exclusions may require elevated privileges; run the tool with sufficient rights if needed.
-- **Performance**: Multi-threaded traversal with a shared queue; simple locking can become a bottleneck on very large trees, but is adequate for typical developer machines.
+- **Performance**: Multi-threaded traversal with one shared queue. No subprocess is spawned during a scan; `tmutil` is used only by `list`, `exclude` and `include`. Measurements, profiles and the reasons: `_docs/performance.md`.
 - **Pattern matching**: Rule file-matching and ignore matching use glob semantics on lowercased names of directory entries.
 
 ### CLI quick reference
@@ -122,11 +148,13 @@ rules:
 - `./asimeow -c path/to/config.yaml` — Use custom config
 - `./asimeow -v` — Verbose output
 - `./asimeow -t 8` — Set worker threads
+- `./asimeow --dry-run` — Report what would be excluded without changing anything
 - `./asimeow init` — Create default config in `~/.config/asimeow/`
 - `./asimeow init --local` — Create `config.yaml` in current directory
 - `./asimeow list [path]` — List Time Machine exclusions
 - `./asimeow exclude <path>` — Exclude a path from backups
 - `./asimeow include <path>` — Include a path in backups
+- `./asimeow stats` — Space saved and largest excluded folders, from the cache
 
 ### Dependencies
 
@@ -135,6 +163,9 @@ rules:
 - `clap` — Command-line argument parsing
 - `anyhow` — Error handling
 - `dirs` — Home directory resolution for `~/`
+- `serde_json` — The cache file
+- `ratatui` — The `--visual` screen (re-exports `crossterm` for terminal input)
+- No other runtime dependencies: the Time Machine mark is read with `getxattr` and written with CoreServices via small FFI declarations in `src/tm.rs`
 
 ### Developer notes
 
@@ -170,11 +201,13 @@ If needed, install `just` via Homebrew: `brew install just`.
 
 ## Glossary of agents (conceptual)
 
-- **CLI agent**: Parses user intent and routes to subcommands or the explorer.
+- **CLI agent**: Parses user intent and routes to subcommands or a scan with the right reporter.
 - **Configuration agent**: Finds, reads, and writes `config.yaml` and expands paths.
-- **Explorer agent**: Owns traversal, queueing, matching rules, and recording results.
+- **Scan agent**: Owns traversal, queueing, matching rules and setting marks; emits events.
+- **Report agent**: Turns events and progress into terminal or log output.
 - **Worker agents**: Concurrent threads that process directories from the shared queue.
-- **Time Machine agent**: Thin shell-out layer that interacts with `tmutil` for inclusion/exclusion queries and commands.
+- **Rules agent**: Compiles rules and ignore patterns once and matches entry names.
+- **Time Machine agent**: Reads and writes the exclusion mark in-process; shells out to `tmutil isexcluded` for status queries.
 
 # Instructions
 

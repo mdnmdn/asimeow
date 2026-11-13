@@ -5,6 +5,65 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `--visual` (alias `--tui`): a full-screen view of a scan. It shows live progress (with
+  an estimate from the last run), space saved (total, this run, change since the last
+  run), the excluded folders grouped by area and sorted by size (folding, `n` for only
+  changes) and recent activity. It stays open for browsing after the scan; `q` quits
+  (also during a scan, which then stops and doesn't save the cache) and prints the
+  summary to the normal screen. Without a terminal it falls back to plain lines.
+- `--dry-run`: report what would be excluded without changing anything
+- In a terminal, a live status line (folders scanned, current folder) and a short summary
+- Exit code 1 when a folder could not be excluded
+- Space savings: every excluded folder is measured, and the summary shows the total
+  excluded, what this run added and the change since the last run
+  (`9.3 GB excluded · +668 MB this run · +0.6 GB since last run`)
+- Recreated folders: a folder that was excluded before but lost its mark (deleting and
+  recreating `node_modules` drops it) is reported as recreated, not as new
+- `asimeow stats`: the savings and the 10 largest excluded folders from the last scan,
+  without scanning
+- A cache in `~/Library/Caches/asimeow/state.json` remembers each excluded folder and its
+  size. A cached size is reused while the folder has the same inode and mtime and the size
+  is less than 7 days old. Dry runs don't update it.
+
+### Changed
+- Quiet output: only changes are listed (newly excluded folders, failures, warnings).
+  Already-excluded folders and unreadable folders (such as `~/.Trash`) are counted in the
+  summary and listed only with `-v`.
+- When the output is not a terminal, plain lines end with one
+  `summary: folders=… exclusions=… new=… recreated=… failed=… unreadable=…
+  excluded_bytes=… new_bytes=… seconds=…` line, which replaces the three "Total …" lines
+- The scan engine (`scan` module) no longer prints; it sends events that a reporter
+  (`report` module) turns into output
+- Much faster scans: on a test tree with 120 build folders, a first run went from 335 s
+  to 0.16 s and a repeat run from 2.96 s to 0.15 s. Exclusion marks are read from the
+  folder's extended attribute and written with the CoreServices call that `tmutil` uses
+  underneath, instead of spawning `tmutil` (about 60 ms per check and about 11 s per
+  write). The mark is identical to the one `tmutil addexclusion` writes. Details and
+  profiles: `_docs/performance.md`.
+- Rules and ignore patterns are compiled once per run instead of once per directory entry
+- `exclude` and `include` report failures instead of "already excluded/included";
+  `include` says when a path stays excluded through a parent folder or a system rule
+- A scan no longer treats folders inside system-excluded locations (such as `/tmp`) or
+  inside an excluded parent as already excluded: they get their own mark
+- New dependencies: `serde_json` (cache file) and `ratatui` (the `--visual` screen)
+
+### Removed
+- Library API (the crate's `explorer` module), replaced by the `scan`, `report`, `tm`,
+  `rules`, `cache` and `tui` modules:
+  - `run_explorer`, `run_explorer_with_stats`, `ExplorerStats`, `State`, `process_path`,
+    `run_workers` → `scan::scan` (events, `Progress`, `Summary`) and `report::run`
+  - `is_excluded_from_timemachine` → `tm::is_excluded`; `exclude_from_timemachine` and
+    `include_in_timemachine` → `tm::set_exclusion_mark`
+  - `config::load_config` no longer prints "Using configuration: …" (the binary does)
+
+### Fixed
+- A race in the worker queue could end a scan early and silently skip folders
+- Symlinked directories are no longer followed (no more loops or walks into other volumes)
+- A failed exclusion was reported as "already excluded"; it's now reported as an error
+
 ## [0.2.1]
 
 ### Fixed

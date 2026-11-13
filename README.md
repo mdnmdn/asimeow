@@ -15,7 +15,12 @@ artifacts from Time Machine backups.
 - Automatically excludes development artifacts from Time Machine backups
 - Provides commands to manually exclude or include specific files and directories
 - Allows listing and checking the exclusion status of files and directories
-- Multi-threaded for fast processing of large directory structures
+- Multi-threaded and fast: a home folder with ~23,000 folders scans in well under a second
+  (see [why](_docs/performance.md))
+- Shows how much space the exclusions save, and what changed since the last run
+- Only prints what changed; a live status line in a terminal, plain lines in scripts
+- Optional full-screen view (`--visual`) with progress, savings and the excluded folders by size
+- `--dry-run` to see what would be excluded without changing anything
 
 ## Acknowledgments
 
@@ -88,6 +93,15 @@ The executable will be available at `target/release/asimeow`.
 # Specify number of worker threads (default: 4)
 ./asimeow -t 8
 
+# Show what would be excluded without changing anything
+./asimeow --dry-run
+
+# Full-screen view: progress, space saved and the excluded folders by size
+./asimeow --visual
+
+# Show how much space the exclusions save, from the last scan (no new scan)
+./asimeow stats
+
 # Create a default configuration file in ~/.config/asimeow/
 ./asimeow init
 
@@ -113,7 +127,7 @@ The executable will be available at `target/release/asimeow`.
 ./asimeow include /path/to/file_or_directory
 ```
 
-Note: This tool requires macOS and uses the `tmutil` command to manage Time Machine exclusions. You may need to run it with sudo for some operations.
+Note: This tool requires macOS. Scans set Time Machine's exclusion mark directly (the same mark `tmutil addexclusion` writes); `list`, `exclude` and `include` also use `tmutil`. No `sudo` is needed for folders you own. Folders protected by macOS privacy settings (such as `~/.Trash` or the Photos library) can't be read unless your terminal has Full Disk Access; they are counted as "could not be read" and skipped.
 
 ### Configuration File Location
 
@@ -214,11 +228,14 @@ When you run `asimeow init`, a default configuration file will be created with c
 3. Directories matching the ignore patterns (e.g., `.git`) are skipped entirely during exploration
 4. When a file matching a rule's pattern is found (e.g., package.json, cargo.toml), it checks for the existence of excluded directories
 5. For each excluded directory that exists (e.g., node_modules, target), it:
-   - Checks if the directory is already excluded from Time Machine
-   - If not, adds it to Time Machine exclusions using `tmutil addexclusion`
+   - Checks if the directory already carries Time Machine's exclusion mark
+   - If not, adds the mark (the same one `tmutil addexclusion` writes, but set in-process, which is much faster)
    - Displays the status with visual indicators (✅ for newly excluded, 🟡 for already excluded)
-6. Directories listed in the exclusions are not explored further
-7. With the verbose flag (-v), additional information is displayed
+6. Directories listed in the exclusions are not explored further, and symlinked directories are never followed
+7. After the walk, every excluded folder is measured (the logical size of its files, hard links counted once).
+   Sizes are cached in `~/Library/Caches/asimeow/state.json` and reused while the folder is unchanged
+   (same inode and modification time) and the size is less than 7 days old, so repeat runs stay fast
+8. With the verbose flag (-v), additional information is displayed
 
 ### Manual Exclusion Commands
 
@@ -238,50 +255,123 @@ The tool also provides direct commands to manage Time Machine exclusions:
 
 ## Example Output
 
-### Default Output (Concise)
+Asimeow prints only what changed: newly excluded folders, failures and warnings.
+Folders that were already excluded are counted but not listed (use `-v` to list them).
+
+### In a terminal
+
+A live status line shows progress while the scan runs. It is replaced by a short summary at the end:
 
 ```
+Using configuration: /Users/user/.config/asimeow/config.yaml
+✅ ~/works/projects/my-rust-project/target  rust
+✅ ~/works/projects/my-node-project/dist  node
+⠹ 12,204 folders · ~/works/projects/website/src/components
+```
+
+```
+✓ Done in 0.4s · 21,967 folders · 77 exclusions, 2 new (1 recreated)
+  2.9 GB excluded · +668 MB this run · +0.6 GB since last run
+  2 folders could not be read; run with -v to list them
+```
+
+"Recreated" means the folder was excluded on an earlier run but lost its mark, which
+happens when it is deleted and created again (`rm -rf node_modules && npm install`).
+
+Colors follow your terminal theme; set `NO_COLOR=1` to turn them off.
+
+### Visual mode (`--visual`)
+
+A full-screen view instead of lines: progress (with an estimate from the last run), the
+space saved, the excluded folders grouped by area and sorted by size, and recent activity.
+
+```
+┌ asimeow 0.2.1 ─────────────────────────────────────────────────────────── done in 0.4s ┐
+│██████████████████████████████████████████100% █████████████████████████████████████████│
+│21,967 folders · 4 exclusions, 2 new (1 recreated)                                      │
+│✓ Scan complete. Browse the folders below, q to quit.                                   │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+┌ Savings ───────────────────────────────────────────────────────────────────────────────┐
+│Excluded     4.0 GB    in 4 folders         New this run +656 MB   1 new · 1 recreated  │
+│Last run     3.0 GB                         Change       +1.0 GB since last run         │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+┌ Where the space goes ────────────────────────────────────────────────── sorted by size ┐
+│▾ ~/projects                                                     2.8 GB ████████████████│
+│    · tool/target                                 rust                 2.1 GB           │
+│    ↻ site/node_modules                           node                 612 MB  recreated│
+│    + notes/.venv                                 python              44.0 MB  new      │
+│▾ ~/archive                                                      1.2 GB ███████         │
+│    · thesis/.venv                                python               1.2 GB           │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+┌ Activity ──────────────────────────────────────────────────────────────────────────────┐
+│↻ ~/projects/site/node_modules was excluded again: the folder was recreated             │
+│+ ~/projects/notes/.venv was excluded (python)                                          │
+│✓ Done: 2 newly excluded, 0 failed                                                      │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+ q quit · ↑↓ move · ←→ fold · n only changes
+```
+
+Keys: `↑`/`↓` (or `j`/`k`) move, `←`/`→` fold and unfold an area, `Enter` toggles,
+`n` shows only folders that changed in this run, `q` or `Esc` quits. The view stays open
+after the scan; quitting during a scan stops it. On quit, the changes and the summary are
+printed to the normal screen. Colors follow your terminal theme.
+
+### In scripts and log files
+
+When the output is not a terminal (a pipe, a file, a launchd or `brew services` log),
+asimeow prints plain lines with absolute paths and ends with a `key=value` summary line:
+
+```
+Using configuration: /Users/user/.config/asimeow/config.yaml
 ✅ /Users/user/works/projects/my-rust-project/target - rust
-🟡 /Users/user/works/projects/my-node-project/node_modules - node
 ✅ /Users/user/works/projects/my-node-project/dist - node
-
-Total paths processed: 42
-Total exclusions found: 3
-Newly excluded from Time Machine: 2
+summary: folders=21967 exclusions=77 new=2 recreated=1 failed=0 unreadable=2 excluded_bytes=2903197910 new_bytes=668000000 seconds=0.42
 ```
+
+Failures (`❌`) and warnings (`⚠️`) go to stderr. The exit code is 1 if any folder could not be excluded.
 
 The output uses:
-- ✅ Green check mark: Directory newly excluded from Time Machine
-- 🟡 Yellow circle: Directory already excluded from Time Machine
+- ✅ Folder newly excluded from Time Machine (or that would be, with `--dry-run`)
+- 🟡 Folder already excluded (listed with `-v`)
+- ❌ Folder that could not be excluded
 
 ### Verbose Output (-v flag)
 
-```
-Asimeow - Folder Analysis Tool
------------------------------
-Reading config from: config.yaml
-Using 4 worker threads
+`-v` adds the loaded rules, every processed folder, every rule match, already-excluded
+folders and folders that could not be read:
 
-Loaded 3 rules:
+```
+Asimeow - Time Machine Exclusion Tool
+------------------------------------
+Using 4 worker threads
+Reading config from: /Users/user/.config/asimeow/config.yaml
+
+Loaded 2 rules:
   - rust (pattern: cargo.toml, exclusions: target)
   - node (pattern: package.json, exclusions: node_modules, dist)
-  - markdown (pattern: *.md, exclusions: )
 
+Using configuration: /Users/user/.config/asimeow/config.yaml
 Processing path: /Users/user/works/projects
 Found match for rule 'rust' at: /Users/user/works/projects/my-rust-project/cargo.toml
 ✅ /Users/user/works/projects/my-rust-project/target - rust
-  → Excluded from Time Machine: /Users/user/works/projects/my-rust-project/target
 Found match for rule 'node' at: /Users/user/works/projects/my-node-project/package.json
 🟡 /Users/user/works/projects/my-node-project/node_modules - node
-  → Already excluded from Time Machine
 ✅ /Users/user/works/projects/my-node-project/dist - node
-  → Excluded from Time Machine: /Users/user/works/projects/my-node-project/dist
-Found match for rule 'markdown' at: /Users/user/works/projects/README.md
-  No exclusions defined for this rule
+Size of /Users/user/works/projects/my-rust-project/target: 548 MB (measured)
+Size of /Users/user/works/projects/my-node-project/node_modules: 212 MB (cached)
+Size of /Users/user/works/projects/my-node-project/dist: 1.2 MB (measured)
+summary: folders=42 exclusions=3 new=2 recreated=0 failed=0 unreadable=0 excluded_bytes=761200000 new_bytes=549200000 seconds=0.05
+```
 
-Total paths processed: 42
-Total exclusions found: 3
-Newly excluded from Time Machine: 2
+### Stats Command Output
+
+```
+3.5 GB excluded in 77 folders · last scan 2 h ago (23,023 folders scanned)
+
+Largest:
+   602 MB  ~/projects/api/target  rust
+   514 MB  ~/projects/web/node_modules  node
+   388 MB  ~/tools/editor-plugins/node_modules  node
 ```
 
 ### List Command Output
@@ -368,7 +458,7 @@ Asimeow automatically identifies and excludes these directories based on project
 
 - [x] Analyze current time machine exclusions of specific paths
 - [ ] Analyze exclusion folder "decay" in order to identify old and unused exclusions and clean from disk
-- [ ] Provide detailed statistics about excluded directories and their sizes
+- [x] Provide detailed statistics about excluded directories and their sizes
 - [ ] Improve tests
 - [ ] Simplify access to configuration via cli options
 
