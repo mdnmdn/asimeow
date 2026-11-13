@@ -139,7 +139,7 @@ rules:
 
 - **Platform**: macOS only. Requires `tmutil` available in PATH.
 - **Permissions**: Some exclusions may require elevated privileges; run the tool with sufficient rights if needed.
-- **Performance**: Multi-threaded traversal with one shared queue. No subprocess is spawned during a scan; `tmutil` is used only by `list`, `exclude` and `include`.
+- **Performance**: Multi-threaded traversal with one shared queue. No subprocess is spawned during a scan; `tmutil` is used only by `list`, `exclude` and `include`. Measurements, profiles and the reasons: `_docs/performance.md`.
 - **Pattern matching**: Rule file-matching and ignore matching use glob semantics on lowercased names of directory entries.
 
 ### CLI quick reference

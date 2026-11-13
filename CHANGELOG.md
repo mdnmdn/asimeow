@@ -37,15 +37,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   excluded_bytes=… new_bytes=… seconds=…` line, which replaces the three "Total …" lines
 - The scan engine (`scan` module) no longer prints; it sends events that a reporter
   (`report` module) turns into output
-- Much faster scans. Exclusion marks are read from the folder's extended attribute and
-  written with the CoreServices call that `tmutil` uses underneath, instead of spawning
-  `tmutil` (about 60 ms per check and several seconds per write). The mark is identical
-  to the one `tmutil addexclusion` writes.
+- Much faster scans: on a test tree with 120 build folders, a first run went from 335 s
+  to 0.16 s and a repeat run from 2.96 s to 0.15 s. Exclusion marks are read from the
+  folder's extended attribute and written with the CoreServices call that `tmutil` uses
+  underneath, instead of spawning `tmutil` (about 60 ms per check and about 11 s per
+  write). The mark is identical to the one `tmutil addexclusion` writes. Details and
+  profiles: `_docs/performance.md`.
 - Rules and ignore patterns are compiled once per run instead of once per directory entry
 - `exclude` and `include` report failures instead of "already excluded/included";
   `include` says when a path stays excluded through a parent folder or a system rule
 - A scan no longer treats folders inside system-excluded locations (such as `/tmp`) or
   inside an excluded parent as already excluded: they get their own mark
+- New dependencies: `serde_json` (cache file) and `ratatui` (the `--visual` screen)
+
+### Removed
+- Library API (the crate's `explorer` module), replaced by the `scan`, `report`, `tm`,
+  `rules`, `cache` and `tui` modules:
+  - `run_explorer`, `run_explorer_with_stats`, `ExplorerStats`, `State`, `process_path`,
+    `run_workers` → `scan::scan` (events, `Progress`, `Summary`) and `report::run`
+  - `is_excluded_from_timemachine` → `tm::is_excluded`; `exclude_from_timemachine` and
+    `include_in_timemachine` → `tm::set_exclusion_mark`
+  - `config::load_config` no longer prints "Using configuration: …" (the binary does)
 
 ### Fixed
 - A race in the worker queue could end a scan early and silently skip folders

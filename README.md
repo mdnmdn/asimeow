@@ -15,7 +15,12 @@ artifacts from Time Machine backups.
 - Automatically excludes development artifacts from Time Machine backups
 - Provides commands to manually exclude or include specific files and directories
 - Allows listing and checking the exclusion status of files and directories
-- Multi-threaded for fast processing of large directory structures
+- Multi-threaded and fast: a home folder with ~23,000 folders scans in well under a second
+  (see [why](_docs/performance.md))
+- Shows how much space the exclusions save, and what changed since the last run
+- Only prints what changed; a live status line in a terminal, plain lines in scripts
+- Optional full-screen view (`--visual`) with progress, savings and the excluded folders by size
+- `--dry-run` to see what would be excluded without changing anything
 
 ## Acknowledgments
 
@@ -122,7 +127,7 @@ The executable will be available at `target/release/asimeow`.
 ./asimeow include /path/to/file_or_directory
 ```
 
-Note: This tool requires macOS and uses the `tmutil` command to manage Time Machine exclusions. You may need to run it with sudo for some operations.
+Note: This tool requires macOS. Scans set Time Machine's exclusion mark directly (the same mark `tmutil addexclusion` writes); `list`, `exclude` and `include` also use `tmutil`. No `sudo` is needed for folders you own. Folders protected by macOS privacy settings (such as `~/.Trash` or the Photos library) can't be read unless your terminal has Full Disk Access; they are counted as "could not be read" and skipped.
 
 ### Configuration File Location
 
@@ -281,27 +286,29 @@ A full-screen view instead of lines: progress (with an estimate from the last ru
 space saved, the excluded folders grouped by area and sorted by size, and recent activity.
 
 ```
-┌ asimeow 0.2.1 ───────────────────────────────────────────────────────── done in 0.3s ┐
-│████████████████████████████████████████100% █████████████████████████████████████████│
-│23,846 folders · 77 exclusions, 0 new                                                 │
-│✓ Scan complete. Browse the folders below, q to quit.                                 │
-└──────────────────────────────────────────────────────────────────────────────────────┘
-┌ Savings ─────────────────────────────────────────────────────────────────────────────┐
-│Excluded     3.0 GB    in 77 folders       New this run +0 B      0 new · 0 recreated │
-│Last run     3.0 GB                        Change       +0 B since last run           │
-└──────────────────────────────────────────────────────────────────────────────────────┘
-┌ Where the space goes ──────────────────────────────────────────────── sorted by size ┐
-│▾ ~/projects                                                   644 MB ████████████████│
-│    · api/target                                 rust                602 MB           │
-│    · notes/.venv                                python-pyproject   42.0 MB           │
-│▾ ~/work                                                       527 MB █████████████   │
-│    · web/node_modules                           node                514 MB           │
-└──────────────────────────────────────────────────────────────────────────────────────┘
-┌ Activity ────────────────────────────────────────────────────────────────────────────┐
-│Cache: 77 known exclusions, 3.0 GB at the last run                                    │
-│✓ Done: 0 would be excluded (dry run, nothing written)                                │
-└──────────────────────────────────────────────────────────────────────────────────────┘
- q quit · ↑↓ move · ←→ fold · n only changes · dry run: nothing is written
+┌ asimeow 0.2.1 ─────────────────────────────────────────────────────────── done in 0.4s ┐
+│██████████████████████████████████████████100% █████████████████████████████████████████│
+│21,967 folders · 4 exclusions, 2 new (1 recreated)                                      │
+│✓ Scan complete. Browse the folders below, q to quit.                                   │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+┌ Savings ───────────────────────────────────────────────────────────────────────────────┐
+│Excluded     4.0 GB    in 4 folders         New this run +656 MB   1 new · 1 recreated  │
+│Last run     3.0 GB                         Change       +1.0 GB since last run         │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+┌ Where the space goes ────────────────────────────────────────────────── sorted by size ┐
+│▾ ~/projects                                                     2.8 GB ████████████████│
+│    · tool/target                                 rust                 2.1 GB           │
+│    ↻ site/node_modules                           node                 612 MB  recreated│
+│    + notes/.venv                                 python              44.0 MB  new      │
+│▾ ~/archive                                                      1.2 GB ███████         │
+│    · thesis/.venv                                python               1.2 GB           │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+┌ Activity ──────────────────────────────────────────────────────────────────────────────┐
+│↻ ~/projects/site/node_modules was excluded again: the folder was recreated             │
+│+ ~/projects/notes/.venv was excluded (python)                                          │
+│✓ Done: 2 newly excluded, 0 failed                                                      │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+ q quit · ↑↓ move · ←→ fold · n only changes
 ```
 
 Keys: `↑`/`↓` (or `j`/`k`) move, `←`/`→` fold and unfold an area, `Enter` toggles,
@@ -359,10 +366,10 @@ summary: folders=42 exclusions=3 new=2 recreated=0 failed=0 unreadable=0 exclude
 ### Stats Command Output
 
 ```
-2.9 GB excluded in 77 folders · last scan 2 h ago (21,967 folders scanned)
+3.5 GB excluded in 77 folders · last scan 2 h ago (23,023 folders scanned)
 
 Largest:
-   548 MB  ~/projects/api/target  rust
+   602 MB  ~/projects/api/target  rust
    514 MB  ~/projects/web/node_modules  node
    388 MB  ~/tools/editor-plugins/node_modules  node
 ```
