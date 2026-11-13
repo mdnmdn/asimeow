@@ -16,7 +16,7 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
   - `exclude <path>`: Force-exclude a directory or file by setting the sticky exclusion mark.
   - `include <path>`: Remove the sticky exclusion mark (and report if a parent folder or a system rule still excludes it).
 - **Initialization**: `init` generates a default `config.yaml` either locally or at `~/.config/asimeow/config.yaml` with common presets for many ecosystems.
-- **Reporting**: Prints concise status lines (✅ newly excluded, 🟡 already excluded) and summary totals (processed paths, exclusions found, newly excluded) when relevant or in verbose mode.
+- **Reporting**: Prints only changes (✅ newly excluded, ❌ failed, ⚠️ warnings) and a summary. In a terminal, a live status line shows progress; otherwise plain lines end with a `summary: key=value …` line. `-v` also lists 🟡 already-excluded and unreadable folders plus per-folder traces. Exit code 1 if any exclusion failed.
 
 ## How it works (internal architecture)
 
@@ -27,10 +27,11 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
   - `-c, --config` path (defaults to auto-detection if left as the default value `config.yaml`)
   - `-v, --verbose`
   - `-t, --threads <N>` worker threads for traversal
+  - `--dry-run` report without writing marks
   - Subcommands: `init`, `version`, `list`, `exclude`, `include`
 - **Execution flow**:
   1. If a subcommand is provided, execute it immediately and exit.
-  2. Otherwise, load configuration (auto-detect path) and run the explorer with the selected thread count.
+  2. Otherwise, load configuration (auto-detect path), pick a reporter (`CompactReporter` if stdout is a terminal, else `LogReporter`) and call `report::run`.
 
 ### Configuration agent
 
@@ -45,22 +46,29 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
   - `load_config(path, verbose)`: reads, parses YAML, prints loaded rules in verbose mode, and validates `roots`.
   - `expand_tilde(path)`: resolves `~/` to the user home directory.
 
-### Explorer agent (orchestrator)
+### Scan agent (engine)
 
-- File: `src/explorer.rs`
-- **State model**:
-  - `State`: the `verbose` and `dry_run` settings plus atomic counters (`processed_paths`, `exclusions_found`, `newly_excluded`).
-  - A private `Queue`: a `VecDeque<PathBuf>` and a `pending` count (directories queued or being processed) under one `Mutex`, with a `Condvar` for idle workers.
-- **Workers**:
-  - `run_workers(roots, state, matcher, thread_count)`: spawns scoped threads. Each one pops a directory, calls `process_path()`, and hands the returned subdirectories back with `Queue::finish`, which adds the children and retires the parent in one locked step. The walk ends when `pending` reaches 0, so it can't end while a worker still holds work.
-- **Traversal**:
-  - `run_explorer(config, threads, verbose, dry_run)`: expands the roots (`~`), compiles the rules once into a `Matcher`, runs the workers, and prints totals.
-  - `process_path(path, state, matcher)`:
-    - Skips directories whose name matches an `ignore` pattern.
-    - Reads entries once. It matches each name against the rules and collects subdirectories with `DirEntry::file_type()`, which does not follow symlinks.
-    - On a rule match, `process_exclusion` checks each `exclusions` item (`current_dir / exclusion`) that exists: already marked → 🟡; otherwise it writes the mark (or only reports it with `--dry-run`) → ✅; a failed write → ❌ on stderr.
-    - Never descends into excluded folders. If `exclusions` contains "." or "..", it stops below this directory.
-    - Returns the remaining subdirectories to walk next.
+- File: `src/scan.rs`. It never prints.
+- **API**: `scan(config, &Options, Sender<Event>, &Progress) -> Result<Summary>`.
+  - `Options { threads, verbose, dry_run }`.
+  - `Event`: `Exclusion { path, rule, kind: New | Already }`, `Failed`, `Unreadable` (a folder that could not be read), `Warning` (always shown, e.g. a missing root), `Trace` (only sent with `verbose`).
+  - `Progress`: atomic folder count plus the current folder; workers update it and reporters sample it.
+  - `Summary { dirs, exclusions, newly_excluded, failed, unreadable, elapsed }`.
+- **Workers**: scoped threads share a private `Walker` (matcher, options, event sender, counters). Each pops a directory from the `Queue`, calls `process_dir()`, and hands the returned subdirectories back with `Queue::finish`, which adds the children and retires the parent in one locked step. The `Queue` is a `VecDeque<PathBuf>` plus a `pending` count under one `Mutex` with a `Condvar`, so the walk can't end while a worker still holds work.
+- **`process_dir(path)`**:
+  - Skips directories whose name matches an `ignore` pattern.
+  - Reads entries once. It matches each name against the rules and collects subdirectories with `DirEntry::file_type()`, which does not follow symlinks.
+  - On a rule match, `process_exclusion` checks each `exclusions` item (`current_dir / exclusion`) that exists: already marked → `Already`; otherwise it writes the mark (skipped with `dry_run`) → `New`; a failed write → `Failed`.
+  - Never descends into excluded folders. If `exclusions` contains "." or "..", it stops below this directory.
+  - Returns the remaining subdirectories to walk next.
+
+### Report agent
+
+- File: `src/report.rs`
+- `run(config, &Options, &mut dyn Reporter)`: runs `scan` on a scoped thread and feeds events to the reporter as they arrive; calls `tick` about every 80 ms and `finish` with the `Summary`.
+- `Reporter` trait: `event`, `tick` (optional), `finish`.
+- `LogReporter`: plain lines with absolute paths, errors to stderr, final `summary: key=value` line.
+- `CompactReporter`: redraws one status line in place (spinner, folder count, current folder, cut to the terminal width), prints changes above it, replaces it with a short summary. Colors are 16-color ANSI and honor `NO_COLOR`.
 
 ### Rules agent
 
@@ -75,7 +83,7 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
   - `has_exclusion_mark(path)`: reads the sticky exclusion xattr `com.apple.metadata:com_apple_backup_excludeItem` (no subprocess). Ignores system-wide and inherited exclusions.
   - `set_exclusion_mark(path, exclude)`: sets or clears the mark with CoreServices `CSBackupSetItemExcluded`, the call `tmutil addexclusion` and cargo use underneath (byte-identical mark, under 1 ms instead of seconds), then verifies it.
   - `is_excluded(path)`: runs `tmutil isexcluded <path>` (includes system and inherited exclusions). Used by `list`, `exclude` and `include`.
-- **User-facing commands** (in `src/explorer.rs`):
+- **User-facing commands** (in `src/explorer.rs`, which only holds these manual commands):
   - `exclude_path(path, verbose)` / `include_path(path, verbose)` wrap the above with path expansion, type detection (file/dir), and user messages.
   - `list_exclusions(path?)`: directory listing mode (if a directory ending with `/` or no path provided) or single item status mode; prints legend and markers.
 
@@ -83,10 +91,10 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
 
 1. CLI parses args and subcommands.
 2. If no subcommand: configuration is located and parsed.
-3. Roots are enqueued; worker threads process the queue concurrently.
-4. Each directory read checks for rule indicators and applies exclusions.
-5. Exclusion marks are read and written in-process, producing ✅ or 🟡 output lines.
-6. Counters are updated and a concise summary is printed at the end.
+3. `report::run` starts the scan on a worker thread; roots are enqueued and worker threads process the queue concurrently.
+4. Each directory read checks for rule indicators and applies exclusions; marks are read and written in-process.
+5. Findings flow as `Event`s to the reporter, which prints changes; progress is sampled for the live status line.
+6. The reporter prints the `Summary`; `main` exits with 1 if any exclusion failed.
 
 ## Configuration quick reference
 
@@ -173,9 +181,10 @@ If needed, install `just` via Homebrew: `brew install just`.
 
 ## Glossary of agents (conceptual)
 
-- **CLI agent**: Parses user intent and routes to subcommands or the explorer.
+- **CLI agent**: Parses user intent and routes to subcommands or a scan with the right reporter.
 - **Configuration agent**: Finds, reads, and writes `config.yaml` and expands paths.
-- **Explorer agent**: Owns traversal, queueing, matching rules, and recording results.
+- **Scan agent**: Owns traversal, queueing, matching rules and setting marks; emits events.
+- **Report agent**: Turns events and progress into terminal or log output.
 - **Worker agents**: Concurrent threads that process directories from the shared queue.
 - **Rules agent**: Compiles rules and ignore patterns once and matches entry names.
 - **Time Machine agent**: Reads and writes the exclusion mark in-process; shells out to `tmutil isexcluded` for status queries.

@@ -1,7 +1,8 @@
 use anyhow::Result;
-use asimeow::config;
-use asimeow::explorer;
+use asimeow::report::{self, CompactReporter, LogReporter};
+use asimeow::{config, explorer, scan};
 use clap::{Parser, Subcommand};
+use std::io::{self, IsTerminal};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -103,10 +104,25 @@ fn main() -> Result<()> {
         None
     };
 
-    let (config, _) = config::load_config(config_path, args.verbose)?;
+    let (config, config_path) = config::load_config(config_path, args.verbose)?;
+    println!("Using configuration: {}", config_path);
 
-    // Run the explorer with the loaded configuration
-    explorer::run_explorer(config, args.threads, args.verbose, args.dry_run)?;
+    let opts = scan::Options {
+        threads: args.threads,
+        verbose: args.verbose,
+        dry_run: args.dry_run,
+    };
+    // A terminal gets a live status line; scripts and log files get plain lines.
+    let summary = if io::stdout().is_terminal() {
+        let mut reporter = CompactReporter::new(io::stdout(), &opts, report::color_enabled());
+        report::run(config, &opts, &mut reporter)?
+    } else {
+        let mut reporter = LogReporter::new(io::stdout(), io::stderr(), &opts);
+        report::run(config, &opts, &mut reporter)?
+    };
 
+    if summary.failed > 0 {
+        std::process::exit(1);
+    }
     Ok(())
 }

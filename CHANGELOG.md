@@ -9,8 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `--dry-run`: report what would be excluded without changing anything
+- In a terminal, a live status line (folders scanned, current folder) and a short summary
+- Exit code 1 when a folder could not be excluded
 
 ### Changed
+- Quiet output: only changes are listed (newly excluded folders, failures, warnings).
+  Already-excluded folders and unreadable folders (such as `~/.Trash`) are counted in the
+  summary and listed only with `-v`.
+- When the output is not a terminal, plain lines end with one
+  `summary: folders=… exclusions=… new=… failed=… unreadable=… seconds=…` line, which
+  replaces the three "Total …" lines
+- The scan engine (`scan` module) no longer prints; it sends events that a reporter
+  (`report` module) turns into output
 - Much faster scans. Exclusion marks are read from the folder's extended attribute and
   written with the CoreServices call that `tmutil` uses underneath, instead of spawning
   `tmutil` (about 60 ms per check and several seconds per write). The mark is identical

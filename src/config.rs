@@ -200,9 +200,6 @@ pub fn load_config(config_path: Option<&str>, verbose: bool) -> Result<(Config, 
     // Find the config file
     let config_path_str = find_config_file(config_path)?;
 
-    // Print the configuration path
-    println!("Using configuration: {}", config_path_str);
-
     if verbose {
         println!("Reading config from: {}", config_path_str);
     }

@@ -241,50 +241,69 @@ The tool also provides direct commands to manage Time Machine exclusions:
 
 ## Example Output
 
-### Default Output (Concise)
+Asimeow prints only what changed: newly excluded folders, failures and warnings.
+Folders that were already excluded are counted but not listed (use `-v` to list them).
+
+### In a terminal
+
+A live status line shows progress while the scan runs. It is replaced by a short summary at the end:
 
 ```
+Using configuration: /Users/user/.config/asimeow/config.yaml
+✅ ~/works/projects/my-rust-project/target  rust
+✅ ~/works/projects/my-node-project/dist  node
+⠹ 12,204 folders · ~/works/projects/website/src/components
+```
+
+```
+✓ Done in 0.2s · 21,967 folders · 77 exclusions, 2 new
+  2 folders could not be read; run with -v to list them
+```
+
+Colors follow your terminal theme; set `NO_COLOR=1` to turn them off.
+
+### In scripts and log files
+
+When the output is not a terminal (a pipe, a file, a launchd or `brew services` log),
+asimeow prints plain lines with absolute paths and ends with a `key=value` summary line:
+
+```
+Using configuration: /Users/user/.config/asimeow/config.yaml
 ✅ /Users/user/works/projects/my-rust-project/target - rust
-🟡 /Users/user/works/projects/my-node-project/node_modules - node
 ✅ /Users/user/works/projects/my-node-project/dist - node
-
-Total paths processed: 42
-Total exclusions found: 3
-Newly excluded from Time Machine: 2
+summary: folders=21967 exclusions=77 new=2 failed=0 unreadable=2 seconds=0.22
 ```
+
+Failures (`❌`) and warnings (`⚠️`) go to stderr. The exit code is 1 if any folder could not be excluded.
 
 The output uses:
-- ✅ Green check mark: Directory newly excluded from Time Machine
-- 🟡 Yellow circle: Directory already excluded from Time Machine
+- ✅ Folder newly excluded from Time Machine (or that would be, with `--dry-run`)
+- 🟡 Folder already excluded (listed with `-v`)
+- ❌ Folder that could not be excluded
 
 ### Verbose Output (-v flag)
 
-```
-Asimeow - Folder Analysis Tool
------------------------------
-Reading config from: config.yaml
-Using 4 worker threads
+`-v` adds the loaded rules, every processed folder, every rule match, already-excluded
+folders and folders that could not be read:
 
-Loaded 3 rules:
+```
+Asimeow - Time Machine Exclusion Tool
+------------------------------------
+Using 4 worker threads
+Reading config from: /Users/user/.config/asimeow/config.yaml
+
+Loaded 2 rules:
   - rust (pattern: cargo.toml, exclusions: target)
   - node (pattern: package.json, exclusions: node_modules, dist)
-  - markdown (pattern: *.md, exclusions: )
 
+Using configuration: /Users/user/.config/asimeow/config.yaml
 Processing path: /Users/user/works/projects
 Found match for rule 'rust' at: /Users/user/works/projects/my-rust-project/cargo.toml
 ✅ /Users/user/works/projects/my-rust-project/target - rust
-  → Excluded from Time Machine: /Users/user/works/projects/my-rust-project/target
 Found match for rule 'node' at: /Users/user/works/projects/my-node-project/package.json
 🟡 /Users/user/works/projects/my-node-project/node_modules - node
-  → Already excluded from Time Machine
 ✅ /Users/user/works/projects/my-node-project/dist - node
-  → Excluded from Time Machine: /Users/user/works/projects/my-node-project/dist
-Found match for rule 'markdown' at: /Users/user/works/projects/README.md
-  No exclusions defined for this rule
-
-Total paths processed: 42
-Total exclusions found: 3
-Newly excluded from Time Machine: 2
+summary: folders=42 exclusions=3 new=2 failed=0 unreadable=0 seconds=0.01
 ```
 
 ### List Command Output

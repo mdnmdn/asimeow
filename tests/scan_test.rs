@@ -1,7 +1,25 @@
 use anyhow::Result;
-use asimeow::{config, explorer};
+use asimeow::config;
+use asimeow::scan::{self, Event, Options, Progress, Summary};
 use std::fs::{self, File};
+use std::sync::mpsc;
 use tempfile::tempdir;
+
+/// Runs a scan and collects everything it reported.
+fn scan_all(
+    config: config::Config,
+    threads: usize,
+    dry_run: bool,
+) -> Result<(Summary, Vec<Event>)> {
+    let (tx, rx) = mpsc::channel();
+    let opts = Options {
+        threads,
+        verbose: false,
+        dry_run,
+    };
+    let summary = scan::scan(config, &opts, tx, &Progress::default())?;
+    Ok((summary, rx.into_iter().collect()))
+}
 
 fn create_test_project(project_name: &str, rules: Vec<config::Rule>) -> Result<tempfile::TempDir> {
     let temp_dir = tempdir()?;
@@ -60,8 +78,8 @@ fn test_process_path_with_node_project() -> Result<()> {
         false,
     )?;
 
-    // Run the explorer
-    let result = explorer::run_explorer(config, 1, false, true);
+    // Run the scan
+    let result = scan_all(config, 1, true);
 
     // Verify it runs without errors
     assert!(result.is_ok());
@@ -98,14 +116,14 @@ fn test_does_not_enqueue_children_of_excluded_dir() -> Result<()> {
         Some(temp_dir.path().join("config.yaml").to_str().unwrap()),
         false,
     )?;
-    let stats = explorer::run_explorer_with_stats(cfg, 2, false, true)?;
+    let (stats, _) = scan_all(cfg, 2, true)?;
 
     // Assert: we should process only the project root (and maybe a few siblings),
     // but never descend into node_modules. Since the traversal counts processed directories,
     // ensure it's small and not proportional to nested depth we created.
     // At minimum it must be >= 1 (the root). Cap at < 5 to indicate we didn't walk deep.
-    assert!(stats.processed_paths >= 1);
-    assert!(stats.processed_paths < 5);
+    assert!(stats.dirs >= 1);
+    assert!(stats.dirs < 5);
 
     Ok(())
 }
@@ -140,8 +158,8 @@ fn test_ignore_patterns() -> Result<()> {
         false,
     )?;
 
-    // Run the explorer
-    let result = explorer::run_explorer(config, 1, false, true);
+    // Run the scan
+    let result = scan_all(config, 1, true);
 
     // Should run without errors
     assert!(result.is_ok());
@@ -186,9 +204,18 @@ fn test_multiple_rules() -> Result<()> {
         false,
     )?;
 
-    // Run the explorer
-    let result = explorer::run_explorer(config, 2, false, true); // Use 2 threads
-    assert!(result.is_ok());
+    // Run the scan: both projects' build folders are found
+    let (summary, events) = scan_all(config, 2, true)?;
+    let mut found: Vec<String> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Exclusion { rule, .. } => Some(rule.clone()),
+            _ => None,
+        })
+        .collect();
+    found.sort();
+    assert_eq!(found, vec!["node", "rust"]);
+    assert_eq!(summary.newly_excluded, 2);
 
     Ok(())
 }
@@ -226,8 +253,8 @@ fn test_nested_projects() -> Result<()> {
         false,
     )?;
 
-    // Run the explorer
-    let result = explorer::run_explorer(config, 1, false, true);
+    // Run the scan
+    let result = scan_all(config, 1, true);
     assert!(result.is_ok());
 
     Ok(())
@@ -262,8 +289,8 @@ fn test_walks_every_directory_with_many_threads() -> Result<()> {
     let expected = 1 + (8 + 64 + 256) + (1 + 100);
 
     for _ in 0..20 {
-        let stats = explorer::run_explorer_with_stats(scan_only(temp_dir.path()), 8, false, true)?;
-        assert_eq!(stats.processed_paths, expected);
+        let (stats, _) = scan_all(scan_only(temp_dir.path()), 8, true)?;
+        assert_eq!(stats.dirs, expected);
     }
     Ok(())
 }
@@ -276,8 +303,8 @@ fn test_symlinked_directories_are_not_followed() -> Result<()> {
     fs::create_dir(&real)?;
     std::os::unix::fs::symlink(temp_dir.path(), real.join("loop"))?;
 
-    let stats = explorer::run_explorer_with_stats(scan_only(temp_dir.path()), 4, false, true)?;
+    let (stats, _) = scan_all(scan_only(temp_dir.path()), 4, true)?;
 
-    assert_eq!(stats.processed_paths, 2, "only the root and real/");
+    assert_eq!(stats.dirs, 2, "only the root and real/");
     Ok(())
 }

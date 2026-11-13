@@ -1,9 +1,21 @@
 use anyhow::Result;
-use asimeow::rules::Matcher;
-use asimeow::{config, explorer, tm};
+use asimeow::scan::{self, Event, Kind, Options, Progress, Summary};
+use asimeow::{config, tm};
 use std::fs::{self, File};
-use std::sync::atomic::Ordering;
+use std::sync::mpsc;
 use tempfile::tempdir;
+
+/// Runs a scan and collects everything it reported.
+fn scan_all(config: config::Config, dry_run: bool) -> Result<(Summary, Vec<Event>)> {
+    let (tx, rx) = mpsc::channel();
+    let opts = Options {
+        threads: 2,
+        verbose: false,
+        dry_run,
+    };
+    let summary = scan::scan(config, &opts, tx, &Progress::default())?;
+    Ok((summary, rx.into_iter().collect()))
+}
 
 #[test]
 fn test_exclusion_logic() -> Result<()> {
@@ -58,24 +70,20 @@ fn test_exclusion_logic() -> Result<()> {
     // Load the config
     let (config, _) = config::load_config(Some(config_path.to_str().unwrap()), false)?;
 
-    // Process only the root directory: it returns the subdirectories to walk next
-    let state = explorer::State::new(false, true);
-    let matcher = Matcher::new(config.rules, &config.ignore);
-    let mut children = explorer::process_path(&project_dir, &state, &matcher);
-    children.sort();
+    // Scan: the root, both projects and node-project/src are walked; node_modules is
+    // reported but not walked into
+    let (summary, events) = scan_all(config, true)?;
 
-    assert_eq!(state.processed_paths.load(Ordering::Relaxed), 1);
+    assert_eq!(summary.dirs, 4);
+    assert_eq!(summary.exclusions, 1);
     assert_eq!(
-        children,
-        vec![node_project.clone(), rust_project.clone()],
-        "both projects are walked next"
+        events,
+        vec![Event::Exclusion {
+            path: node_project.join("node_modules"),
+            rule: "node".to_string(),
+            kind: Kind::New,
+        }]
     );
-
-    // Processing the node project finds node_modules and does not walk into it
-    let children = explorer::process_path(&node_project, &state, &matcher);
-    assert_eq!(children, vec![node_project.join("src")]);
-    assert_eq!(state.exclusions_found.load(Ordering::Relaxed), 1);
-
     Ok(())
 }
 
@@ -104,7 +112,7 @@ fn node_project() -> Result<(tempfile::TempDir, config::Config, std::path::PathB
 fn test_dry_run_writes_nothing() -> Result<()> {
     let (_temp_dir, config, node_modules) = node_project()?;
 
-    let stats = explorer::run_explorer_with_stats(config, 2, false, true)?;
+    let (stats, _) = scan_all(config, true)?;
 
     assert_eq!(stats.newly_excluded, 1, "reported as would-be new");
     assert!(!tm::has_exclusion_mark(&node_modules), "but not written");
@@ -115,7 +123,7 @@ fn test_dry_run_writes_nothing() -> Result<()> {
 fn test_run_writes_the_exclusion_mark_once() -> Result<()> {
     let (_temp_dir, config, node_modules) = node_project()?;
 
-    let first = explorer::run_explorer_with_stats(config.clone(), 2, false, false)?;
+    let (first, _) = scan_all(config.clone(), false)?;
     assert_eq!(first.newly_excluded, 1);
     assert!(tm::has_exclusion_mark(&node_modules));
     // The mark is the one `tmutil addexclusion` writes
@@ -125,9 +133,16 @@ fn test_run_writes_the_exclusion_mark_once() -> Result<()> {
         .output()?;
     assert!(String::from_utf8_lossy(&mark.stdout).contains("com.apple.backupd"));
 
-    let second = explorer::run_explorer_with_stats(config, 2, false, false)?;
-    assert_eq!(second.exclusions_found, 1);
+    let (second, events) = scan_all(config, false)?;
+    assert_eq!(second.exclusions, 1);
     assert_eq!(second.newly_excluded, 0, "already marked on the second run");
+    assert!(matches!(
+        events.as_slice(),
+        [Event::Exclusion {
+            kind: Kind::Already,
+            ..
+        }]
+    ));
     Ok(())
 }
 
